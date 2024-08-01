@@ -726,12 +726,13 @@ public class MCOpenXR extends MCVR {
 
     @Override
     public Vector2f getPlayAreaSize() {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            XrExtent2Df vec = XrExtent2Df.calloc(stack);
-            int error = XR10.xrGetReferenceSpaceBoundsRect(session, XR10.XR_REFERENCE_SPACE_TYPE_STAGE, vec);
-            logError(error, "xrGetReferenceSpaceBoundsRect",  "");
-            return new Vector2f(vec.width(), vec.height());
-        }
+        // try (MemoryStack stack = MemoryStack.stackPush()) {
+        //     XrExtent2Df vec = XrExtent2Df.calloc(stack);
+        //     int error = XR10.xrGetReferenceSpaceBoundsRect(session, XR10.XR_REFERENCE_SPACE_TYPE_STAGE, vec);
+        //     logError(error, "xrGetReferenceSpaceBoundsRect",  "");
+        //     return new Vector2f(vec.width(), vec.height());
+        // }
+        return new Vector2f();
     }
 
     @Override
