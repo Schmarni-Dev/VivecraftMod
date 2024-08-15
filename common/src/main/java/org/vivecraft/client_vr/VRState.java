@@ -36,24 +36,33 @@ public class VRState {
         }
         try {
             if (OptifineHelper.isOptifineLoaded() && OptifineHelper.isAntialiasing()) {
-                throw new RenderConfigException(Component.translatable("vivecraft.messages.incompatiblesettings").getString(), Component.translatable("vivecraft.messages.optifineaa"));
+                throw new RenderConfigException(
+                        Component.translatable("vivecraft.messages.incompatiblesettings").getString(),
+                        Component.translatable("vivecraft.messages.optifineaa"));
             }
 
             vrInitialized = true;
             ClientDataHolderVR dh = ClientDataHolderVR.getInstance();
             Minecraft instance = Minecraft.getInstance();
-            // make sure the lwjgl version is the right one
-            // TODO: move this into the init, does mean all callocs need to be done later
-            // check that the right lwjgl version is loaded that we ship the openvr part of
-            if (!Version.getVersion().startsWith("3.3.2")) {
-                String suppliedJar = "";
-                try {
-                    suppliedJar = new File(Version.class.getProtectionDomain().getCodeSource().getLocation().getPath()).getName();
-                } catch (Exception e) {
-                    VRSettings.logger.error("couldn't check lwjgl source:", e);
+            if (dh.vrSettings.stereoProviderPluginID == VRSettings.VRProvider.OPENVR) {
+                // make sure the lwjgl version is the right one
+                // TODO: move this into the init, does mean all callocs need to be done later
+                // check that the right lwjgl version is loaded that we ship the openvr part of
+                if (!Version.getVersion().startsWith("3.3.3")) {
+                    String suppliedJar = "";
+                    try {
+                        suppliedJar = new File(
+                                Version.class.getProtectionDomain().getCodeSource().getLocation().getPath()).getName();
+                    } catch (Exception e) {
+                        VRSettings.logger.error("couldn't check lwjgl source:", e);
+                    }
+
+                    throw new RenderConfigException("VR Init Error",
+                            Component.translatable("vivecraft.messages.rendersetupfailed", I18n
+                                    .get("vivecraft.messages.invalidlwjgl", Version.getVersion(), "3.3.3", suppliedJar),
+                                    "OpenVR_LWJGL"));
                 }
 
-                throw new RenderConfigException("VR Init Error", Component.translatable("vivecraft.messages.rendersetupfailed", I18n.get("vivecraft.messages.invalidlwjgl", Version.getVersion(), "3.3.2", suppliedJar), "OpenVR_LWJGL"));
             }
             switch (dh.vrSettings.stereoProviderPluginID) {
                 case OPENVR -> dh.vr = new MCOpenVR(instance, dh);
@@ -62,13 +71,14 @@ public class VRState {
             }
 
             if (!dh.vr.init()) {
-                throw new RenderConfigException("VR Init Error", Component.translatable("vivecraft.messages.rendersetupfailed", dh.vr.initStatus, dh.vr.getName()));
+                throw new RenderConfigException("VR Init Error", Component
+                        .translatable("vivecraft.messages.rendersetupfailed", dh.vr.initStatus, dh.vr.getName()));
             }
 
             dh.vrRenderer = dh.vr.createVRRenderer();
             dh.vrRenderer.lastGuiScale = Minecraft.getInstance().options.guiScale().get();
 
-            dh.vrRenderer.setupRenderConfiguration(false); //TODO look into why I have the boolean
+            dh.vrRenderer.setupRenderConfiguration(false); // TODO look into why I have the boolean
             RenderPassManager.setVanillaRenderPass();
 
             dh.vrPlayer = new VRPlayer();
@@ -96,23 +106,31 @@ public class VRState {
             dh.menuWorldRenderer.init();
 
             try {
-                String garbageCollector = StringUtils.getCommonPrefix(ManagementFactory.getGarbageCollectorMXBeans().stream().map(MemoryManagerMXBean::getName).toArray(String[]::new)).trim();
+                String garbageCollector = StringUtils.getCommonPrefix(ManagementFactory.getGarbageCollectorMXBeans()
+                        .stream().map(MemoryManagerMXBean::getName).toArray(String[]::new)).trim();
                 if (garbageCollector.isEmpty()) {
                     garbageCollector = ManagementFactory.getGarbageCollectorMXBeans().get(0).getName();
                 }
                 VRSettings.logger.info("Garbage collector: {}", garbageCollector);
 
                 // Fully qualified name here to avoid any ambiguity
-                com.sun.management.OperatingSystemMXBean os = (com.sun.management.OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
-                // Might as well log this stuff since we have it, could be useful for technical support
+                com.sun.management.OperatingSystemMXBean os = (com.sun.management.OperatingSystemMXBean) ManagementFactory
+                        .getOperatingSystemMXBean();
+                // Might as well log this stuff since we have it, could be useful for technical
+                // support
                 VRSettings.logger.info("Available CPU threads: {}", Runtime.getRuntime().availableProcessors());
-                VRSettings.logger.info("Total physical memory: {} GiB", String.format("%.01f", os.getTotalMemorySize() / 1073741824.0F));
-                VRSettings.logger.info("Free physical memory: {} GiB", String.format("%.01f", os.getFreeMemorySize() / 1073741824.0F));
+                VRSettings.logger.info("Total physical memory: {} GiB",
+                        String.format("%.01f", os.getTotalMemorySize() / 1073741824.0F));
+                VRSettings.logger.info("Free physical memory: {} GiB",
+                        String.format("%.01f", os.getFreeMemorySize() / 1073741824.0F));
 
-                if (!garbageCollector.startsWith("ZGC") && !ClientDataHolderVR.getInstance().vrSettings.disableGarbageCollectorMessage) {
+                if (!garbageCollector.startsWith("ZGC")
+                        && !ClientDataHolderVR.getInstance().vrSettings.disableGarbageCollectorMessage) {
                     // At least 12 GiB RAM (minus 256 MiB for possible reserved) and 8 CPU threads
-                    if (os.getTotalMemorySize() >= 1073741824L * 12L - 1048576L * 256L && Runtime.getRuntime().availableProcessors() >= 6) {
-                        // store the garbage collector, as indicator, that the GarbageCollectorScreen should be shown, if it would be discarded
+                    if (os.getTotalMemorySize() >= 1073741824L * 12L - 1048576L * 256L
+                            && Runtime.getRuntime().availableProcessors() >= 6) {
+                        // store the garbage collector, as indicator, that the GarbageCollectorScreen
+                        // should be shown, if it would be discarded
                         dh.incorrectGarbageCollector = garbageCollector;
                         Minecraft.getInstance().setScreen(new GarbageCollectorScreen(garbageCollector));
                     }
@@ -124,12 +142,14 @@ public class VRState {
             vrEnabled = false;
             destroyVR(true);
             renderConfigException.printStackTrace();
-            Minecraft.getInstance().setScreen(new ErrorScreen(renderConfigException.title, renderConfigException.error));
+            Minecraft.getInstance()
+                    .setScreen(new ErrorScreen(renderConfigException.title, renderConfigException.error));
         } catch (Throwable e) {
             vrEnabled = false;
             destroyVR(true);
             e.printStackTrace();
-            MutableComponent component = Component.literal(e.getClass().getName() + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+            MutableComponent component = Component
+                    .literal(e.getClass().getName() + (e.getMessage() == null ? "" : ": " + e.getMessage()));
             for (StackTraceElement element : e.getStackTrace()) {
                 component.append(Component.literal("\n" + element.toString()));
             }
@@ -170,6 +190,6 @@ public class VRState {
     }
 
     public static void pauseVR() {
-        //        GLFW.glfwSwapInterval(bl ? 1 : 0);
+        // GLFW.glfwSwapInterval(bl ? 1 : 0);
     }
 }

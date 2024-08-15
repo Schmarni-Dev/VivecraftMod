@@ -39,6 +39,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
+import org.joml.Matrix4fStack;
 import org.lwjgl.glfw.GLFW;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Final;
@@ -140,13 +141,6 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
     @Shadow
     private boolean pause;
 
-    @Shadow
-    private float pausePartialTick;
-
-    @Final
-    @Shadow
-    private Timer timer;
-
     @Final
     @Shadow
     public GameRenderer gameRenderer;
@@ -217,6 +211,10 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
 
     @Shadow
     public abstract void resizeDisplay();
+
+    @Shadow
+    @Final
+    private DeltaTracker.Timer timer;
 
     @ModifyArg(at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;setOverlay(Lnet/minecraft/client/gui/screens/Overlay;)V"), method = "<init>", index = 0)
     public Overlay vivecraft$initVivecraft(Overlay overlay) {
@@ -304,7 +302,7 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
             RenderPassManager.setGUIRenderPass();
             // reset camera position, if there is one, since it only gets set at the start of rendering, and the last renderpass can be anywhere
             if (gameRenderer != null && gameRenderer.getMainCamera() != null && level != null && this.getCameraEntity() != null) {
-                this.gameRenderer.getMainCamera().setup(this.level, this.getCameraEntity(), false, false, this.pause ? this.pausePartialTick : this.timer.partialTick);
+                this.gameRenderer.getMainCamera().setup(this.level, this.getCameraEntity(), false, false, timer.getGameTimeDeltaPartialTick(true));
             }
 
             this.profiler.push("VR Poll/VSync");
@@ -342,13 +340,13 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
     public void vivecraft$preRender(CallbackInfo ci) {
         if (VRState.vrRunning) {
             this.profiler.push("preRender");
-            ClientDataHolderVR.getInstance().vrPlayer.preRender(this.pause ? this.pausePartialTick : this.timer.partialTick);
+            ClientDataHolderVR.getInstance().vrPlayer.preRender(timer.getGameTimeDeltaPartialTick(true));
             VRHotkeys.updateMovingThirdPersonCam();
             this.profiler.pop();
         }
     }
 
-    @ModifyArg(at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render(FJZ)V"), method = "runTick")
+    @ModifyArg(at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render(Lnet/minecraft/client/DeltaTracker;Z)V"), method = "runTick")
     public boolean vivecraft$setupRenderGUI(boolean renderLevel) {
         if (VRState.vrRunning) {
 
@@ -377,7 +375,7 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
 
             // draw screen/gui to buffer
             // push pose so we can pop it later
-            RenderSystem.getModelViewStack().pushPose();
+            RenderSystem.getModelViewStack().pushMatrix();
             ((GameRendererExtension) this.gameRenderer).vivecraft$setShouldDrawScreen(true);
             // only draw the gui when the level was rendered once, since some mods expect that
             ((GameRendererExtension) this.gameRenderer).vivecraft$setShouldDrawGui(renderLevel && this.entityRenderDispatcher.camera != null);
@@ -709,8 +707,8 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
         return VRState.vrRunning || instance.isMouseGrabbed();
     }
 
-    @Inject(at = @At("HEAD"), method = "setLevel(Lnet/minecraft/client/multiplayer/ClientLevel;)V")
-    public void vivecraft$roomScale(ClientLevel pLevelClient, CallbackInfo info) {
+    @Inject(at = @At("HEAD"), method = "setLevel")
+    public void vivecraft$roomScale(CallbackInfo info) {
         if (VRState.vrRunning) {
             ClientDataHolderVR.getInstance().vrPlayer.setRoomOrigin(0.0D, 0.0D, 0.0D, true);
         }
@@ -751,8 +749,8 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
             Matrix4f matrix4f = new Matrix4f().setOrtho(0.0F, (float) screenX,
                 screenY, 0.0F, 1000.0F, 3000.0F);
             RenderSystem.setProjectionMatrix(matrix4f, VertexSorting.ORTHOGRAPHIC_Z);
-            RenderSystem.getModelViewStack().pushPose();
-            RenderSystem.getModelViewStack().setIdentity();
+            RenderSystem.getModelViewStack().pushMatrix();
+            RenderSystem.getModelViewStack().identity();
             RenderSystem.getModelViewStack().translate(0, 0, -2000);
             RenderSystem.applyModelViewMatrix();
             RenderSystem.setShaderFogStart(Float.MAX_VALUE);
@@ -781,7 +779,7 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
                 j += 12;
             }
             guiGraphics.flush();
-            RenderSystem.getModelViewStack().popPose();
+            RenderSystem.getModelViewStack().popMatrix();
         }
     }
 
@@ -972,14 +970,12 @@ public abstract class MinecraftVRMixin implements MinecraftExtension {
 
         VRShaders.depthMaskShader.apply();
 
-        Tesselator tesselator = RenderSystem.renderThreadTesselator();
-        BufferBuilder bufferbuilder = tesselator.getBuilder();
-        bufferbuilder.begin(VertexFormat.Mode.QUADS, VRShaders.depthMaskShader.getVertexFormat());
-        bufferbuilder.vertex(-1, -1, 0.0).uv(0, 0).endVertex();
-        bufferbuilder.vertex(1, -1, 0.0).uv(2, 0).endVertex();
-        bufferbuilder.vertex(1, 1, 0.0).uv(2, 2).endVertex();
-        bufferbuilder.vertex(-1, 1, 0.0).uv(0, 2).endVertex();
-        BufferUploader.draw(bufferbuilder.end());
+        BufferBuilder bufferbuilder = RenderSystem.renderThreadTesselator().begin(VertexFormat.Mode.QUADS, VRShaders.depthMaskShader.getVertexFormat());
+        bufferbuilder.addVertex(-1, -1, 0).setUv(0, 0);
+        bufferbuilder.addVertex(1, -1, 0).setUv(2, 0);
+        bufferbuilder.addVertex(1, 1, 0).setUv(2, 2);
+        bufferbuilder.addVertex(-1, 1, 0).setUv(0, 2);
+        BufferUploader.draw(bufferbuilder.buildOrThrow());
         VRShaders.depthMaskShader.clear();
 
         ProgramManager.glUseProgram(0);

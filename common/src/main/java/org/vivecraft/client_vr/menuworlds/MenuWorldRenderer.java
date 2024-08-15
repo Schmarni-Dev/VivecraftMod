@@ -6,6 +6,7 @@ import com.mojang.blaze3d.shaders.FogShape;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
 import com.mojang.math.Axis;
+import it.unimi.dsi.fastutil.objects.Reference2ObjectArrayMap;
 import net.minecraft.Util;
 import net.minecraft.client.CloudStatus;
 import net.minecraft.client.GraphicsStatus;
@@ -17,6 +18,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Vec3i;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.BiomeTags;
 import net.minecraft.tags.FluidTags;
@@ -31,6 +33,7 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.dimension.BuiltinDimensionTypes;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.FluidState;
@@ -39,6 +42,8 @@ import net.minecraft.world.level.material.FogType;
 import net.minecraft.world.phys.Vec3;
 import org.apache.commons.lang3.tuple.Pair;
 import org.joml.Matrix4f;
+import org.joml.Matrix4fStack;
+import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 import org.vivecraft.client.Xplat;
@@ -47,6 +52,8 @@ import org.vivecraft.client.utils.Utils;
 import org.vivecraft.client_vr.ClientDataHolderVR;
 import org.vivecraft.client_vr.settings.VRSettings;
 import org.vivecraft.mixin.client.renderer.RenderStateShardAccessor;
+import org.vivecraft.mod_compat_vr.ShadersHelper;
+import org.vivecraft.mod_compat_vr.iris.IrisHelper;
 import org.vivecraft.mod_compat_vr.optifine.OptifineHelper;
 import org.vivecraft.mod_compat_vr.sodium.SodiumHelper;
 
@@ -57,16 +64,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class MenuWorldRenderer {
-    private static final ResourceLocation MOON_LOCATION = new ResourceLocation("textures/environment/moon_phases.png");
-    private static final ResourceLocation SUN_LOCATION = new ResourceLocation("textures/environment/sun.png");
-    private static final ResourceLocation CLOUDS_LOCATION = new ResourceLocation("textures/environment/clouds.png");
-    private static final ResourceLocation END_SKY_LOCATION = new ResourceLocation("textures/environment/end_sky.png");
+    private static final ResourceLocation MOON_LOCATION = ResourceLocation.withDefaultNamespace("textures/environment/moon_phases.png");
+    private static final ResourceLocation SUN_LOCATION = ResourceLocation.withDefaultNamespace("textures/environment/sun.png");
+    private static final ResourceLocation CLOUDS_LOCATION = ResourceLocation.withDefaultNamespace("textures/environment/clouds.png");
+    private static final ResourceLocation END_SKY_LOCATION = ResourceLocation.withDefaultNamespace("textures/environment/end_sky.png");
 
-    private static final ResourceLocation FORCEFIELD_LOCATION = new ResourceLocation("textures/misc/forcefield.png");
+    private static final ResourceLocation FORCEFIELD_LOCATION = ResourceLocation.withDefaultNamespace("textures/misc/forcefield.png");
 
-    private static final ResourceLocation RAIN_LOCATION = new ResourceLocation("textures/environment/rain.png");
+    private static final ResourceLocation RAIN_LOCATION = ResourceLocation.withDefaultNamespace("textures/environment/rain.png");
 
-    private static final ResourceLocation SNOW_LOCATION = new ResourceLocation("textures/environment/snow.png");
+    private static final ResourceLocation SNOW_LOCATION = ResourceLocation.withDefaultNamespace("textures/environment/snow.png");
 
     private final Minecraft mc;
     private DimensionSpecialEffects dimensionInfo;
@@ -83,8 +90,8 @@ public class MenuWorldRenderer {
     public boolean fastTime;
     private HashMap<RenderType, List<VertexBuffer>> vertexBuffers;
     private VertexBuffer starVBO;
-    private VertexBuffer skyVBO;
-    private VertexBuffer sky2VBO;
+    private VertexBuffer skyBuffer;
+    private VertexBuffer darkBuffer;
     private VertexBuffer cloudVBO;
     private int renderDistance;
     private int renderDistanceChunks;
@@ -113,6 +120,7 @@ public class MenuWorldRenderer {
     public Vec3i segmentSize = new Vec3i(64, 64, 64);
 
     private boolean building = false;
+    private boolean shadersEnabled = false;
     private long buildStartTime;
     private Map<Pair<RenderType, BlockPos>, BufferBuilder> bufferBuilders;
     private Map<Pair<RenderType, BlockPos>, BlockPos.MutableBlockPos> currentPositions;
@@ -179,7 +187,7 @@ public class MenuWorldRenderer {
         }
     }
 
-    public void render(PoseStack poseStack) {
+    public void render(Matrix4fStack poseStack) {
 
         // temporarily disable fabulous to render the menu world
         GraphicsStatus current = mc.options.graphicsMode().get();
@@ -189,13 +197,13 @@ public class MenuWorldRenderer {
 
         turnOnLightLayer();
 
-        poseStack.pushPose();
+        poseStack.pushMatrix();
 
         //rotate World
-        poseStack.mulPose(Axis.YP.rotationDegrees(worldRotation));
+        poseStack.rotate(Axis.YP.rotationDegrees(worldRotation));
 
         // small offset to center on source block, and add the partial block offset, this shouldn't be too noticable on the fog
-        poseStack.translate(-0.5, -blockAccess.getGround() + (int) blockAccess.getGround(), -0.5);
+        poseStack.translate(-0.5F, -blockAccess.getGround() + (int) blockAccess.getGround(), -0.5F);
 
         // not sure why this needs to be rotated twice, but it works
         Vec3 offset = new Vec3(0.5, -blockAccess.getGround() + (int) blockAccess.getGround(), 0.5).yRot(worldRotation * 0.0174533f);
@@ -210,14 +218,13 @@ public class MenuWorldRenderer {
         RenderSystem.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
         RenderSystem.enableBlend();
 
-        Matrix4f modelView = poseStack.last().pose();
         Matrix4f projection = RenderSystem.getProjectionMatrix();
 
         RenderSystem.disableBlend();
 
-        renderChunkLayer(RenderType.solid(), modelView, projection);
-        renderChunkLayer(RenderType.cutoutMipped(), modelView, projection);
-        renderChunkLayer(RenderType.cutout(), modelView, projection);
+        renderChunkLayer(RenderType.solid(), poseStack, projection);
+        renderChunkLayer(RenderType.cutoutMipped(), poseStack, projection);
+        renderChunkLayer(RenderType.cutout(), poseStack, projection);
 
         RenderSystem.enableBlend();
 
@@ -230,8 +237,8 @@ public class MenuWorldRenderer {
             renderClouds(poseStack, eyePosition.x, eyePosition.y + blockAccess.getGround() + blockAccess.getMinBuildHeight(), eyePosition.z);
         }
 
-        renderChunkLayer(RenderType.translucent(), modelView, projection);
-        renderChunkLayer(RenderType.tripwire(), modelView, projection);
+        renderChunkLayer(RenderType.translucent(), poseStack, projection);
+        renderChunkLayer(RenderType.tripwire(), poseStack, projection);
 
         if (eyePosition.y + blockAccess.getGround() + blockAccess.getMinBuildHeight() >= cloudHeight) {
             renderClouds(poseStack, eyePosition.x, eyePosition.y + blockAccess.getGround() + blockAccess.getMinBuildHeight(), eyePosition.z);
@@ -241,7 +248,7 @@ public class MenuWorldRenderer {
         renderSnowAndRain(poseStack, eyePosition.x, 0, eyePosition.z);
         RenderSystem.depthMask(true);
 
-        poseStack.popPose();
+        poseStack.popMatrix();
         turnOffLightLayer();
         mc.options.graphicsMode().set(current);
     }
@@ -276,6 +283,11 @@ public class MenuWorldRenderer {
             animatedSprites = ConcurrentHashMap.newKeySet();
             blockCounts = new ConcurrentHashMap<>();
             renderTimes = new ConcurrentHashMap<>();
+            if (IrisHelper.isIrisLoaded() && IrisHelper.isShaderActive()) {
+                shadersEnabled = true;
+                mc.gui.getChat().addMessage(Component.literal("Vivecraft: temporarily disabling shaders to build Menuworld"));
+                IrisHelper.toggleShaders(mc, false);
+            }
 
             try {
                 vertexBuffers = new HashMap<>();
@@ -291,8 +303,8 @@ public class MenuWorldRenderer {
                                 BlockPos pos = new BlockPos(x, y, z);
                                 Pair<RenderType, BlockPos> pair = Pair.of(layer, pos);
 
-                                BufferBuilder vertBuffer = new BufferBuilder(32768); // yields most efficient memory use for some reason
-                                vertBuffer.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.BLOCK);
+                                // 32768 yields most efficient memory use for some reason
+                                BufferBuilder vertBuffer = new BufferBuilder(new ByteBufferBuilder(32768), VertexFormat.Mode.QUADS, DefaultVertexFormat.BLOCK);
 
                                 bufferBuilders.put(pair, vertBuffer);
                                 currentPositions.put(pair, pos.mutable());
@@ -438,19 +450,22 @@ public class MenuWorldRenderer {
         }));
 
         int totalMemory = 0, count = 0;
-        for (var entry : entryList) {
-            RenderType layer = entry.getKey().getLeft();
-            BufferBuilder vertBuffer = entry.getValue();
-            if (layer == RenderType.translucent()) {
-                vertBuffer.setQuadSorting(VertexSorting.byDistance(0, Mth.frac(blockAccess.getGround()), 0));
+        try (ByteBufferBuilder builder = new ByteBufferBuilder(32768)) {
+            for (var entry : entryList) {
+                RenderType layer = entry.getKey().getLeft();
+                BufferBuilder bufferBuilder = entry.getValue();
+                MeshData meshData = bufferBuilder.build();
+                if (meshData != null) {
+                    if (layer == RenderType.translucent()) {
+                        meshData.sortQuads(builder, VertexSorting.byDistance(0, Mth.frac(blockAccess.getGround()), 0));
+                    }
+                    uploadGeometry(layer, meshData);
+                    count++;
+                }
+                totalMemory += ((BufferBuilderExtension) bufferBuilder).vivecraft$getBufferSize();
+                ((BufferBuilderExtension) bufferBuilder).vivecraft$freeBuffer();
+
             }
-            BufferBuilder.RenderedBuffer renderedBuffer = vertBuffer.end();
-            if (!renderedBuffer.isEmpty()) {
-                uploadGeometry(layer, renderedBuffer);
-                count++;
-            }
-            totalMemory += ((BufferBuilderExtension) vertBuffer).vivecraft$getBufferSize();
-            ((BufferBuilderExtension) vertBuffer).vivecraft$freeBuffer();
         }
 
         bufferBuilders = null;
@@ -464,6 +479,10 @@ public class MenuWorldRenderer {
             entryList.size(),
             totalMemory / 1048576,
             count);
+        if (shadersEnabled) {
+            shadersEnabled = false;
+            IrisHelper.toggleShaders(mc, true);
+        }
     }
 
     public boolean isOnBuilderThread() {
@@ -485,10 +504,10 @@ public class MenuWorldRenderer {
         builderError = null;
     }
 
-    private void uploadGeometry(RenderType layer, BufferBuilder.RenderedBuffer renderedBuffer) {
+    private void uploadGeometry(RenderType layer, MeshData meshData) {
         VertexBuffer buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
         buffer.bind();
-        buffer.upload(renderedBuffer);
+        buffer.upload(meshData);
         VertexBuffer.unbind();
         vertexBuffers.get(layer).add(buffer);
     }
@@ -527,11 +546,11 @@ public class MenuWorldRenderer {
         if (starVBO != null) {
             starVBO.close();
         }
-        if (skyVBO != null) {
-            skyVBO.close();
+        if (skyBuffer != null) {
+            skyBuffer.close();
         }
-        if (sky2VBO != null) {
-            sky2VBO.close();
+        if (darkBuffer != null) {
+            darkBuffer.close();
         }
         if (cloudVBO != null) {
             cloudVBO.close();
@@ -591,9 +610,9 @@ public class MenuWorldRenderer {
             }
         }
 
-        this.generateSky();
-        this.generateSky2();
-        this.generateStars();
+        this.generateLightSky();
+        this.generateDarkSky();
+        this.createStars();
     }
 
     public boolean isReady() {
@@ -629,7 +648,7 @@ public class MenuWorldRenderer {
     }
     // End VanillaFix support
 
-    public void renderSky(PoseStack poseStack, Vec3 position) {
+    public void renderSky(Matrix4fStack poseStack, Vec3 position) {
         if (this.dimensionInfo.skyType() == DimensionSpecialEffects.SkyType.END) {
             this.renderEndSky(poseStack);
         } else if (this.dimensionInfo.skyType() == DimensionSpecialEffects.SkyType.NORMAL) {
@@ -646,14 +665,13 @@ public class MenuWorldRenderer {
 
             fogRenderer.levelFogColor();
 
-            BufferBuilder bufferBuilder = Tesselator.getInstance().getBuilder();
             RenderSystem.depthMask(false);
             RenderSystem.setShaderColor((float) skyColor.x, (float) skyColor.y, (float) skyColor.z, 1.0f);
 
 
             if (!OptifineHelper.isOptifineLoaded() || OptifineHelper.isSkyEnabled()) {
-                this.skyVBO.bind();
-                this.skyVBO.drawWithShader(poseStack.last().pose(), RenderSystem.getProjectionMatrix(), skyShader);
+                this.skyBuffer.bind();
+                this.skyBuffer.drawWithShader(poseStack, RenderSystem.getProjectionMatrix(), skyShader);
                 VertexBuffer.unbind();
             }
 
@@ -666,60 +684,58 @@ public class MenuWorldRenderer {
                 //RenderSystem.disableTexture();
                 RenderSystem.setShader(GameRenderer::getPositionColorShader);
                 RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
-                poseStack.pushPose();
+                poseStack.pushMatrix();
 
-                poseStack.mulPose(Axis.XP.rotationDegrees(90.0f));
-                poseStack.mulPose(Axis.ZP.rotationDegrees(Mth.sin(this.getSunAngle()) < 0.0f ? 180.0f : 0.0f));
-                poseStack.mulPose(Axis.ZP.rotationDegrees(90.0f));
+                poseStack.rotate(Axis.XP.rotationDegrees(90.0f));
+                poseStack.rotate(Axis.ZP.rotationDegrees(Mth.sin(this.getSunAngle()) < 0.0f ? 180.0f : 0.0f));
+                poseStack.rotate(Axis.ZP.rotationDegrees(90.0f));
 
-                Matrix4f modelView = poseStack.last().pose();
-                bufferBuilder.begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_COLOR);
+                Matrix4f modelView = poseStack;
+                BufferBuilder bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_COLOR);
                 bufferBuilder
-                    .vertex(modelView, 0.0f, 100.0f, 0.0f)
-                    .color(sunriseColor[0], sunriseColor[1], sunriseColor[2], sunriseColor[3])
-                    .endVertex();
+                    .addVertex(modelView, 0.0f, 100.0f, 0.0f)
+                    .setColor(sunriseColor[0], sunriseColor[1], sunriseColor[2], sunriseColor[3]);
 
                 for (int j = 0; j <= 16; ++j) {
                     float f6 = (float) j * ((float) Math.PI * 2F) / 16.0F;
                     float f7 = Mth.sin(f6);
                     float f8 = Mth.cos(f6);
                     bufferBuilder
-                        .vertex(modelView, f7 * 120.0F, f8 * 120.0F, -f8 * 40.0F * sunriseColor[3])
-                        .color(sunriseColor[0], sunriseColor[1], sunriseColor[2], 0.0F)
-                        .endVertex();
+                        .addVertex(modelView, f7 * 120.0F, f8 * 120.0F, -f8 * 40.0F * sunriseColor[3])
+                        .setColor(sunriseColor[0], sunriseColor[1], sunriseColor[2], 0.0F);
                 }
 
-                BufferUploader.drawWithShader(bufferBuilder.end());
-                poseStack.popPose();
+                BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
+                poseStack.popMatrix();
             }
 
             //RenderSystem.enableTexture();
 
             RenderSystem.blendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE, GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ZERO);
-            poseStack.pushPose();
+            poseStack.pushMatrix();
 
             float f10 = 1.0F - getRainLevel();
             RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, f10);
-            poseStack.mulPose(Axis.YP.rotationDegrees(-90.0f));
-            Matrix4f modelView = poseStack.last().pose();
+            poseStack.rotate(Axis.YP.rotationDegrees(-90.0f));
+            Matrix4f modelView = poseStack;
 
             //if (OptifineHelper.isOptifineLoaded()) {
             // needs a full Level
             //CustomSky.renderSky(this.world, poseStack, Minecraft.getInstance().getFrameTime());
             //}
 
-            poseStack.mulPose(Axis.XP.rotationDegrees(this.getTimeOfDay() * 360.0f));
+            poseStack.rotate(Axis.XP.rotationDegrees(this.getTimeOfDay() * 360.0f));
 
             float size = 30.0F;
             if (!OptifineHelper.isOptifineLoaded() || OptifineHelper.isSunMoonEnabled()) {
                 RenderSystem.setShader(GameRenderer::getPositionTexShader);
                 RenderSystem.setShaderTexture(0, SUN_LOCATION);
-                bufferBuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
-                bufferBuilder.vertex(modelView, -size, 100.0F, -size).uv(0.0F, 0.0F).endVertex();
-                bufferBuilder.vertex(modelView, size, 100.0F, -size).uv(1.0F, 0.0F).endVertex();
-                bufferBuilder.vertex(modelView, size, 100.0F, size).uv(1.0F, 1.0F).endVertex();
-                bufferBuilder.vertex(modelView, -size, 100.0F, size).uv(0.0F, 1.0F).endVertex();
-                BufferUploader.drawWithShader(bufferBuilder.end());
+                BufferBuilder bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
+                bufferBuilder.addVertex(modelView, -size, 100.0F, -size).setUv(0.0F, 0.0F);
+                bufferBuilder.addVertex(modelView, size, 100.0F, -size).setUv(1.0F, 0.0F);
+                bufferBuilder.addVertex(modelView, size, 100.0F, size).setUv(1.0F, 1.0F);
+                bufferBuilder.addVertex(modelView, -size, 100.0F, size).setUv(0.0F, 1.0F);
+                BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
             }
 
             size = 20.0F;
@@ -732,12 +748,12 @@ public class MenuWorldRenderer {
                 float v0 = (float) (i1) / 2.0F;
                 float u1 = (float) (l + 1) / 4.0F;
                 float v1 = (float) (i1 + 1) / 2.0F;
-                bufferBuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
-                bufferBuilder.vertex(modelView, -size, -100.0f, size).uv(u0, v1).endVertex();
-                bufferBuilder.vertex(modelView, size, -100.0f, size).uv(u1, v1).endVertex();
-                bufferBuilder.vertex(modelView, size, -100.0f, -size).uv(u1, v0).endVertex();
-                bufferBuilder.vertex(modelView, -size, -100.0f, -size).uv(u0, v0).endVertex();
-                BufferUploader.drawWithShader(bufferBuilder.end());
+                BufferBuilder bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
+                bufferBuilder.addVertex(modelView, -size, -100.0f, size).setUv(u0, v1);
+                bufferBuilder.addVertex(modelView, size, -100.0f, size).setUv(u1, v1);
+                bufferBuilder.addVertex(modelView, size, -100.0f, -size).setUv(u1, v0);
+                bufferBuilder.addVertex(modelView, -size, -100.0f, -size).setUv(u0, v0);
+                BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
             }
 
             //GlStateManager.disableTexture();
@@ -748,7 +764,7 @@ public class MenuWorldRenderer {
                 RenderSystem.setShaderColor(starBrightness, starBrightness, starBrightness, starBrightness);
                 fogRenderer.setupNoFog();
                 this.starVBO.bind();
-                this.starVBO.drawWithShader(poseStack.last().pose(), RenderSystem.getProjectionMatrix(), GameRenderer.getPositionShader());
+                this.starVBO.drawWithShader(poseStack, RenderSystem.getProjectionMatrix(), GameRenderer.getPositionShader());
                 VertexBuffer.unbind();
                 fogRenderer.setupFog(FogRenderer.FogMode.FOG_SKY);
             }
@@ -757,19 +773,19 @@ public class MenuWorldRenderer {
             RenderSystem.disableBlend();
             RenderSystem.defaultBlendFunc();
 
-            poseStack.popPose();
+            poseStack.popMatrix();
             //RenderSystem.disableTexture();
 
             double horizonDistance = position.y - this.blockAccess.getHorizon();
 
             if (horizonDistance < 0.0D) {
                 RenderSystem.setShaderColor(0.0f, 0.0f, 0.0f, 1.0f);
-                poseStack.pushPose();
+                poseStack.pushMatrix();
                 poseStack.translate(0.0f, 12.0f, 0.0f);
-                this.sky2VBO.bind();
-                this.sky2VBO.drawWithShader(poseStack.last().pose(), RenderSystem.getProjectionMatrix(), skyShader);
+                this.darkBuffer.bind();
+                this.darkBuffer.drawWithShader(poseStack, RenderSystem.getProjectionMatrix(), skyShader);
                 VertexBuffer.unbind();
-                poseStack.popPose();
+                poseStack.popMatrix();
             }
 
             RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
@@ -777,28 +793,25 @@ public class MenuWorldRenderer {
         }
     }
 
-    private void renderEndSky(PoseStack poseStack) {
+    private void renderEndSky(Matrix4fStack poseStack) {
         if (!OptifineHelper.isOptifineLoaded() || OptifineHelper.isSkyEnabled()) {
             RenderSystem.enableBlend();
             RenderSystem.blendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA, GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ZERO);
             RenderSystem.depthMask(false);
             RenderSystem.setShader(GameRenderer::getPositionTexColorShader);
             RenderSystem.setShaderTexture(0, END_SKY_LOCATION);
-            Tesselator tesselator = Tesselator.getInstance();
-            BufferBuilder bufferBuilder = tesselator.getBuilder();
 
             for (int i = 0; i < 6; ++i) {
-                poseStack.pushPose();
+                poseStack.pushMatrix();
                 switch (i) {
-                    case 1 -> poseStack.mulPose(Axis.XP.rotationDegrees(90.0f));
-                    case 2 -> poseStack.mulPose(Axis.XP.rotationDegrees(-90.0f));
-                    case 3 -> poseStack.mulPose(Axis.XP.rotationDegrees(180.0f));
-                    case 4 -> poseStack.mulPose(Axis.ZP.rotationDegrees(90.0f));
-                    case 5 -> poseStack.mulPose(Axis.ZP.rotationDegrees(-90.0f));
+                    case 1 -> poseStack.rotate(Axis.XP.rotationDegrees(90.0f));
+                    case 2 -> poseStack.rotate(Axis.XP.rotationDegrees(-90.0f));
+                    case 3 -> poseStack.rotate(Axis.XP.rotationDegrees(180.0f));
+                    case 4 -> poseStack.rotate(Axis.ZP.rotationDegrees(90.0f));
+                    case 5 -> poseStack.rotate(Axis.ZP.rotationDegrees(-90.0f));
                 }
 
-                Matrix4f modelView = poseStack.last().pose();
-                bufferBuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
+                BufferBuilder bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
 
                 int r = 40;
                 int g = 40;
@@ -811,12 +824,12 @@ public class MenuWorldRenderer {
                     g = (int) (newSkyColor.y * 255.0D);
                     b = (int) (newSkyColor.z * 255.0D);
                 }
-                bufferBuilder.vertex(modelView, -100.0f, -100.0f, -100.0f).uv(0.0f, 0.0f).color(r, g, b, 255).endVertex();
-                bufferBuilder.vertex(modelView, -100.0f, -100.0f, 100.0f).uv(0.0f, 16.0f).color(r, g, b, 255).endVertex();
-                bufferBuilder.vertex(modelView, 100.0f, -100.0f, 100.0f).uv(16.0f, 16.0f).color(r, g, b, 255).endVertex();
-                bufferBuilder.vertex(modelView, 100.0f, -100.0f, -100.0f).uv(16.0f, 0.0f).color(r, g, b, 255).endVertex();
-                tesselator.end();
-                poseStack.popPose();
+                bufferBuilder.addVertex(poseStack, -100.0f, -100.0f, -100.0f).setUv(0.0f, 0.0f).setColor(r, g, b, 255);
+                bufferBuilder.addVertex(poseStack, -100.0f, -100.0f, 100.0f).setUv(0.0f, 16.0f).setColor(r, g, b, 255);
+                bufferBuilder.addVertex(poseStack, 100.0f, -100.0f, 100.0f).setUv(16.0f, 16.0f).setColor(r, g, b, 255);
+                bufferBuilder.addVertex(poseStack, 100.0f, -100.0f, -100.0f).setUv(16.0f, 0.0f).setColor(r, g, b, 255);
+                BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
+                poseStack.popMatrix();
             }
 
             RenderSystem.depthMask(true);
@@ -824,7 +837,7 @@ public class MenuWorldRenderer {
         }
     }
 
-    public void renderClouds(PoseStack poseStack, double x, double y, double z) {
+    public void renderClouds(Matrix4fStack poseStack, double x, double y, double z) {
         float cloudHeight = this.dimensionInfo.getCloudHeight();
 
         if (!Float.isNaN(cloudHeight) && this.mc.options.getCloudsType() != CloudStatus.OFF) {
@@ -838,7 +851,7 @@ public class MenuWorldRenderer {
 
             float cloudSizeXZ = 12.0f;
             float cloudSizeY = 4.0f;
-            double cloudOffset = ((float) ticks + mc.getFrameTime()) * 0.03f;
+            double cloudOffset = ((float) ticks + mc.getTimer().getGameTimeDeltaPartialTick(false)) * 0.03f;
             double cloudX = (x + cloudOffset) / 12.0;
             double cloudY = cloudHeight - y + 0.33;
             if (OptifineHelper.isOptifineLoaded()) {
@@ -870,22 +883,20 @@ public class MenuWorldRenderer {
             }
             if (this.generateClouds) {
                 this.generateClouds = false;
-                BufferBuilder bufferBuilder = Tesselator.getInstance().getBuilder();
                 if (this.cloudVBO != null) {
                     this.cloudVBO.close();
                 }
                 this.cloudVBO = new VertexBuffer(VertexBuffer.Usage.STATIC);
-                BufferBuilder.RenderedBuffer renderedBuffer = this.buildClouds(bufferBuilder, cloudX, cloudY, cloudZ, cloudColor);
                 this.cloudVBO.bind();
-                this.cloudVBO.upload(renderedBuffer);
+                this.cloudVBO.upload(this.buildClouds(Tesselator.getInstance(), cloudX, cloudY, cloudZ, cloudColor));
                 VertexBuffer.unbind();
             }
 
             // render
-            RenderSystem.setShader(GameRenderer::getPositionTexColorNormalShader);
+            RenderSystem.setShader(GameRenderer::getRendertypeCloudsShader);
             RenderSystem.setShaderTexture(0, CLOUDS_LOCATION);
             fogRenderer.levelFogColor();
-            poseStack.pushPose();
+            poseStack.pushMatrix();
             poseStack.scale(12.0f, 1.0f, 12.0f);
             poseStack.translate(-cloudXfract, cloudYfract, -cloudZfract);
             if (this.cloudVBO != null) {
@@ -897,18 +908,18 @@ public class MenuWorldRenderer {
                     } else {
                         RenderSystem.colorMask(true, true, true, true);
                     }
-                    this.cloudVBO.drawWithShader(poseStack.last().pose(), RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
+                    this.cloudVBO.drawWithShader(poseStack, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
                 }
                 VertexBuffer.unbind();
             }
-            poseStack.popPose();
+            poseStack.popMatrix();
             RenderSystem.enableCull();
             RenderSystem.disableBlend();
             RenderSystem.defaultBlendFunc();
         }
     }
 
-    private BufferBuilder.RenderedBuffer buildClouds(BufferBuilder bufferBuilder, double cloudX, double cloudY, double cloudZ, Vec3 cloudColor) {
+    private MeshData buildClouds(Tesselator tesselator, double cloudX, double cloudY, double cloudZ, Vec3 cloudColor) {
         float l = (float) Mth.floor(cloudX) * 0.00390625f;
         float m = (float) Mth.floor(cloudZ) * 0.00390625f;
         float redTop = (float) cloudColor.x;
@@ -923,8 +934,8 @@ public class MenuWorldRenderer {
         float redZ = redTop * 0.8f;
         float greenZ = greenTop * 0.8f;
         float blueZ = blueTop * 0.8f;
-        RenderSystem.setShader(GameRenderer::getPositionTexColorNormalShader);
-        bufferBuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL);
+        RenderSystem.setShader(GameRenderer::getRendertypeCloudsShader);
+        BufferBuilder bufferBuilder = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL);
         float z = (float) Math.floor(cloudY / 4.0) * 4.0f;
         if (this.prevCloudsType == CloudStatus.FANCY) {
             for (int aa = -3; aa <= 4; ++aa) {
@@ -933,49 +944,49 @@ public class MenuWorldRenderer {
                     float ac = aa * 8;
                     float ad = ab * 8;
                     if (z > -5.0f) {
-                        bufferBuilder.vertex(ac + 0.0f, z + 0.0f, ad + 8.0f).uv((ac + 0.0f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).color(redBottom, greenBottom, blueBottom, 0.8f).normal(0.0f, -1.0f, 0.0f).endVertex();
-                        bufferBuilder.vertex(ac + 8.0f, z + 0.0f, ad + 8.0f).uv((ac + 8.0f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).color(redBottom, greenBottom, blueBottom, 0.8f).normal(0.0f, -1.0f, 0.0f).endVertex();
-                        bufferBuilder.vertex(ac + 8.0f, z + 0.0f, ad + 0.0f).uv((ac + 8.0f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).color(redBottom, greenBottom, blueBottom, 0.8f).normal(0.0f, -1.0f, 0.0f).endVertex();
-                        bufferBuilder.vertex(ac + 0.0f, z + 0.0f, ad + 0.0f).uv((ac + 0.0f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).color(redBottom, greenBottom, blueBottom, 0.8f).normal(0.0f, -1.0f, 0.0f).endVertex();
+                        bufferBuilder.addVertex(ac + 0.0f, z + 0.0f, ad + 8.0f).setUv((ac + 0.0f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).setColor(redBottom, greenBottom, blueBottom, 0.8f).setNormal(0.0f, -1.0f, 0.0f);
+                        bufferBuilder.addVertex(ac + 8.0f, z + 0.0f, ad + 8.0f).setUv((ac + 8.0f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).setColor(redBottom, greenBottom, blueBottom, 0.8f).setNormal(0.0f, -1.0f, 0.0f);
+                        bufferBuilder.addVertex(ac + 8.0f, z + 0.0f, ad + 0.0f).setUv((ac + 8.0f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).setColor(redBottom, greenBottom, blueBottom, 0.8f).setNormal(0.0f, -1.0f, 0.0f);
+                        bufferBuilder.addVertex(ac + 0.0f, z + 0.0f, ad + 0.0f).setUv((ac + 0.0f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).setColor(redBottom, greenBottom, blueBottom, 0.8f).setNormal(0.0f, -1.0f, 0.0f);
                     }
                     if (z <= 5.0f) {
-                        bufferBuilder.vertex(ac + 0.0f, z + 4.0f - 9.765625E-4f, ad + 8.0f).uv((ac + 0.0f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).color(redTop, greenTop, blueTop, 0.8f).normal(0.0f, 1.0f, 0.0f).endVertex();
-                        bufferBuilder.vertex(ac + 8.0f, z + 4.0f - 9.765625E-4f, ad + 8.0f).uv((ac + 8.0f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).color(redTop, greenTop, blueTop, 0.8f).normal(0.0f, 1.0f, 0.0f).endVertex();
-                        bufferBuilder.vertex(ac + 8.0f, z + 4.0f - 9.765625E-4f, ad + 0.0f).uv((ac + 8.0f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).color(redTop, greenTop, blueTop, 0.8f).normal(0.0f, 1.0f, 0.0f).endVertex();
-                        bufferBuilder.vertex(ac + 0.0f, z + 4.0f - 9.765625E-4f, ad + 0.0f).uv((ac + 0.0f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).color(redTop, greenTop, blueTop, 0.8f).normal(0.0f, 1.0f, 0.0f).endVertex();
+                        bufferBuilder.addVertex(ac + 0.0f, z + 4.0f - 9.765625E-4f, ad + 8.0f).setUv((ac + 0.0f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).setColor(redTop, greenTop, blueTop, 0.8f).setNormal(0.0f, 1.0f, 0.0f);
+                        bufferBuilder.addVertex(ac + 8.0f, z + 4.0f - 9.765625E-4f, ad + 8.0f).setUv((ac + 8.0f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).setColor(redTop, greenTop, blueTop, 0.8f).setNormal(0.0f, 1.0f, 0.0f);
+                        bufferBuilder.addVertex(ac + 8.0f, z + 4.0f - 9.765625E-4f, ad + 0.0f).setUv((ac + 8.0f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).setColor(redTop, greenTop, blueTop, 0.8f).setNormal(0.0f, 1.0f, 0.0f);
+                        bufferBuilder.addVertex(ac + 0.0f, z + 4.0f - 9.765625E-4f, ad + 0.0f).setUv((ac + 0.0f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).setColor(redTop, greenTop, blueTop, 0.8f).setNormal(0.0f, 1.0f, 0.0f);
                     }
                     if (aa > -1) {
                         for (ae = 0; ae < 8; ++ae) {
-                            bufferBuilder.vertex(ac + (float) ae + 0.0f, z + 0.0f, ad + 8.0f).uv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).color(redX, greenX, blueX, 0.8f).normal(-1.0f, 0.0f, 0.0f).endVertex();
-                            bufferBuilder.vertex(ac + (float) ae + 0.0f, z + 4.0f, ad + 8.0f).uv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).color(redX, greenX, blueX, 0.8f).normal(-1.0f, 0.0f, 0.0f).endVertex();
-                            bufferBuilder.vertex(ac + (float) ae + 0.0f, z + 4.0f, ad + 0.0f).uv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).color(redX, greenX, blueX, 0.8f).normal(-1.0f, 0.0f, 0.0f).endVertex();
-                            bufferBuilder.vertex(ac + (float) ae + 0.0f, z + 0.0f, ad + 0.0f).uv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).color(redX, greenX, blueX, 0.8f).normal(-1.0f, 0.0f, 0.0f).endVertex();
+                            bufferBuilder.addVertex(ac + (float) ae + 0.0f, z + 0.0f, ad + 8.0f).setUv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).setColor(redX, greenX, blueX, 0.8f).setNormal(-1.0f, 0.0f, 0.0f);
+                            bufferBuilder.addVertex(ac + (float) ae + 0.0f, z + 4.0f, ad + 8.0f).setUv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).setColor(redX, greenX, blueX, 0.8f).setNormal(-1.0f, 0.0f, 0.0f);
+                            bufferBuilder.addVertex(ac + (float) ae + 0.0f, z + 4.0f, ad + 0.0f).setUv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).setColor(redX, greenX, blueX, 0.8f).setNormal(-1.0f, 0.0f, 0.0f);
+                            bufferBuilder.addVertex(ac + (float) ae + 0.0f, z + 0.0f, ad + 0.0f).setUv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).setColor(redX, greenX, blueX, 0.8f).setNormal(-1.0f, 0.0f, 0.0f);
                         }
                     }
                     if (aa <= 1) {
                         for (ae = 0; ae < 8; ++ae) {
-                            bufferBuilder.vertex(ac + (float) ae + 1.0f - 9.765625E-4f, z + 0.0f, ad + 8.0f).uv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).color(redX, greenX, blueX, 0.8f).normal(1.0f, 0.0f, 0.0f).endVertex();
-                            bufferBuilder.vertex(ac + (float) ae + 1.0f - 9.765625E-4f, z + 4.0f, ad + 8.0f).uv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).color(redX, greenX, blueX, 0.8f).normal(1.0f, 0.0f, 0.0f).endVertex();
-                            bufferBuilder.vertex(ac + (float) ae + 1.0f - 9.765625E-4f, z + 4.0f, ad + 0.0f).uv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).color(redX, greenX, blueX, 0.8f).normal(1.0f, 0.0f, 0.0f).endVertex();
-                            bufferBuilder.vertex(ac + (float) ae + 1.0f - 9.765625E-4f, z + 0.0f, ad + 0.0f).uv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).color(redX, greenX, blueX, 0.8f).normal(1.0f, 0.0f, 0.0f).endVertex();
+                            bufferBuilder.addVertex(ac + (float) ae + 1.0f - 9.765625E-4f, z + 0.0f, ad + 8.0f).setUv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).setColor(redX, greenX, blueX, 0.8f).setNormal(1.0f, 0.0f, 0.0f);
+                            bufferBuilder.addVertex(ac + (float) ae + 1.0f - 9.765625E-4f, z + 4.0f, ad + 8.0f).setUv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 8.0f) * 0.00390625f + m).setColor(redX, greenX, blueX, 0.8f).setNormal(1.0f, 0.0f, 0.0f);
+                            bufferBuilder.addVertex(ac + (float) ae + 1.0f - 9.765625E-4f, z + 4.0f, ad + 0.0f).setUv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).setColor(redX, greenX, blueX, 0.8f).setNormal(1.0f, 0.0f, 0.0f);
+                            bufferBuilder.addVertex(ac + (float) ae + 1.0f - 9.765625E-4f, z + 0.0f, ad + 0.0f).setUv((ac + (float) ae + 0.5f) * 0.00390625f + l, (ad + 0.0f) * 0.00390625f + m).setColor(redX, greenX, blueX, 0.8f).setNormal(1.0f, 0.0f, 0.0f);
                         }
                     }
                     if (ab > -1) {
                         for (ae = 0; ae < 8; ++ae) {
-                            bufferBuilder.vertex(ac + 0.0f, z + 4.0f, ad + (float) ae + 0.0f).uv((ac + 0.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).color(redZ, greenZ, blueZ, 0.8f).normal(0.0f, 0.0f, -1.0f).endVertex();
-                            bufferBuilder.vertex(ac + 8.0f, z + 4.0f, ad + (float) ae + 0.0f).uv((ac + 8.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).color(redZ, greenZ, blueZ, 0.8f).normal(0.0f, 0.0f, -1.0f).endVertex();
-                            bufferBuilder.vertex(ac + 8.0f, z + 0.0f, ad + (float) ae + 0.0f).uv((ac + 8.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).color(redZ, greenZ, blueZ, 0.8f).normal(0.0f, 0.0f, -1.0f).endVertex();
-                            bufferBuilder.vertex(ac + 0.0f, z + 0.0f, ad + (float) ae + 0.0f).uv((ac + 0.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).color(redZ, greenZ, blueZ, 0.8f).normal(0.0f, 0.0f, -1.0f).endVertex();
+                            bufferBuilder.addVertex(ac + 0.0f, z + 4.0f, ad + (float) ae + 0.0f).setUv((ac + 0.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).setColor(redZ, greenZ, blueZ, 0.8f).setNormal(0.0f, 0.0f, -1.0f);
+                            bufferBuilder.addVertex(ac + 8.0f, z + 4.0f, ad + (float) ae + 0.0f).setUv((ac + 8.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).setColor(redZ, greenZ, blueZ, 0.8f).setNormal(0.0f, 0.0f, -1.0f);
+                            bufferBuilder.addVertex(ac + 8.0f, z + 0.0f, ad + (float) ae + 0.0f).setUv((ac + 8.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).setColor(redZ, greenZ, blueZ, 0.8f).setNormal(0.0f, 0.0f, -1.0f);
+                            bufferBuilder.addVertex(ac + 0.0f, z + 0.0f, ad + (float) ae + 0.0f).setUv((ac + 0.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).setColor(redZ, greenZ, blueZ, 0.8f).setNormal(0.0f, 0.0f, -1.0f);
                         }
                     }
                     if (ab > 1) {
                         continue;
                     }
                     for (ae = 0; ae < 8; ++ae) {
-                        bufferBuilder.vertex(ac + 0.0f, z + 4.0f, ad + (float) ae + 1.0f - 9.765625E-4f).uv((ac + 0.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).color(redZ, greenZ, blueZ, 0.8f).normal(0.0f, 0.0f, 1.0f).endVertex();
-                        bufferBuilder.vertex(ac + 8.0f, z + 4.0f, ad + (float) ae + 1.0f - 9.765625E-4f).uv((ac + 8.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).color(redZ, greenZ, blueZ, 0.8f).normal(0.0f, 0.0f, 1.0f).endVertex();
-                        bufferBuilder.vertex(ac + 8.0f, z + 0.0f, ad + (float) ae + 1.0f - 9.765625E-4f).uv((ac + 8.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).color(redZ, greenZ, blueZ, 0.8f).normal(0.0f, 0.0f, 1.0f).endVertex();
-                        bufferBuilder.vertex(ac + 0.0f, z + 0.0f, ad + (float) ae + 1.0f - 9.765625E-4f).uv((ac + 0.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).color(redZ, greenZ, blueZ, 0.8f).normal(0.0f, 0.0f, 1.0f).endVertex();
+                        bufferBuilder.addVertex(ac + 0.0f, z + 4.0f, ad + (float) ae + 1.0f - 9.765625E-4f).setUv((ac + 0.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).setColor(redZ, greenZ, blueZ, 0.8f).setNormal(0.0f, 0.0f, 1.0f);
+                        bufferBuilder.addVertex(ac + 8.0f, z + 4.0f, ad + (float) ae + 1.0f - 9.765625E-4f).setUv((ac + 8.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).setColor(redZ, greenZ, blueZ, 0.8f).setNormal(0.0f, 0.0f, 1.0f);
+                        bufferBuilder.addVertex(ac + 8.0f, z + 0.0f, ad + (float) ae + 1.0f - 9.765625E-4f).setUv((ac + 8.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).setColor(redZ, greenZ, blueZ, 0.8f).setNormal(0.0f, 0.0f, 1.0f);
+                        bufferBuilder.addVertex(ac + 0.0f, z + 0.0f, ad + (float) ae + 1.0f - 9.765625E-4f).setUv((ac + 0.0f) * 0.00390625f + l, (ad + (float) ae + 0.5f) * 0.00390625f + m).setColor(redZ, greenZ, blueZ, 0.8f).setNormal(0.0f, 0.0f, 1.0f);
                     }
                 }
             }
@@ -984,30 +995,30 @@ public class MenuWorldRenderer {
             int ab = 32;
             for (int af = -32; af < 32; af += 32) {
                 for (int ag = -32; ag < 32; ag += 32) {
-                    bufferBuilder.vertex(af, z, ag + 32).uv((float) (af) * 0.00390625f + l, (float) (ag + 32) * 0.00390625f + m).color(redTop, greenTop, blueTop, 0.8f).normal(0.0f, -1.0f, 0.0f).endVertex();
-                    bufferBuilder.vertex(af + 32, z, ag + 32).uv((float) (af + 32) * 0.00390625f + l, (float) (ag + 32) * 0.00390625f + m).color(redTop, greenTop, blueTop, 0.8f).normal(0.0f, -1.0f, 0.0f).endVertex();
-                    bufferBuilder.vertex(af + 32, z, ag).uv((float) (af + 32) * 0.00390625f + l, (float) (ag) * 0.00390625f + m).color(redTop, greenTop, blueTop, 0.8f).normal(0.0f, -1.0f, 0.0f).endVertex();
-                    bufferBuilder.vertex(af, z, ag).uv((float) (af) * 0.00390625f + l, (float) (ag) * 0.00390625f + m).color(redTop, greenTop, blueTop, 0.8f).normal(0.0f, -1.0f, 0.0f).endVertex();
+                    bufferBuilder.addVertex(af, z, ag + 32).setUv((float) (af) * 0.00390625f + l, (float) (ag + 32) * 0.00390625f + m).setColor(redTop, greenTop, blueTop, 0.8f).setNormal(0.0f, -1.0f, 0.0f);
+                    bufferBuilder.addVertex(af + 32, z, ag + 32).setUv((float) (af + 32) * 0.00390625f + l, (float) (ag + 32) * 0.00390625f + m).setColor(redTop, greenTop, blueTop, 0.8f).setNormal(0.0f, -1.0f, 0.0f);
+                    bufferBuilder.addVertex(af + 32, z, ag).setUv((float) (af + 32) * 0.00390625f + l, (float) (ag) * 0.00390625f + m).setColor(redTop, greenTop, blueTop, 0.8f).setNormal(0.0f, -1.0f, 0.0f);
+                    bufferBuilder.addVertex(af, z, ag).setUv((float) (af) * 0.00390625f + l, (float) (ag) * 0.00390625f + m).setColor(redTop, greenTop, blueTop, 0.8f).setNormal(0.0f, -1.0f, 0.0f);
                 }
             }
         }
-        return bufferBuilder.end();
+        return bufferBuilder.buildOrThrow();
     }
 
-    private void renderSnowAndRain(PoseStack poseStack, double inX, double inY, double inZ) {
+    private void renderSnowAndRain(Matrix4fStack poseStack, double inX, double inY, double inZ) {
         if (getRainLevel() <= 0.0f) {
             return;
         }
 
-        RenderSystem.getModelViewStack().pushPose();
-        RenderSystem.getModelViewStack().mulPoseMatrix(poseStack.last().pose());
+        RenderSystem.getModelViewStack().pushMatrix();
+        RenderSystem.getModelViewStack().mul(poseStack);
         RenderSystem.applyModelViewMatrix();
 
         int xFloor = Mth.floor(inX);
         int yFloor = Mth.floor(inY);
         int zFloor = Mth.floor(inZ);
-        Tesselator tesselator = Tesselator.getInstance();
-        BufferBuilder bufferBuilder = tesselator.getBuilder();
+
+        BufferBuilder bufferBuilder = null;
         RenderSystem.disableCull();
         RenderSystem.enableBlend();
         RenderSystem.enableDepthTest();
@@ -1017,7 +1028,7 @@ public class MenuWorldRenderer {
         }
         RenderSystem.depthMask(true);
         int count = -1;
-        float rainAnimationTime = this.ticks + mc.getFrameTime();
+        float rainAnimationTime = this.ticks + mc.getTimer().getGameTimeDeltaPartialTick(false);
         RenderSystem.setShader(GameRenderer::getParticleShader);
         turnOnLightLayer();
         BlockPos.MutableBlockPos mutableBlockPos = new BlockPos.MutableBlockPos();
@@ -1064,29 +1075,29 @@ public class MenuWorldRenderer {
                 if (precipitation == Biome.Precipitation.RAIN) {
                     if (count != 0) {
                         if (count >= 0) {
-                            tesselator.end();
+                            BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
                         }
                         count = 0;
                         RenderSystem.setShaderTexture(0, RAIN_LOCATION);
-                        bufferBuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.PARTICLE);
+                        bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.PARTICLE);
                     }
 
                     blend = ((1.0f - distance * distance) * 0.5f + 0.5f);
                     int x = this.ticks + rainX * rainX * 3121 + rainX * 45238971 + rainZ * rainZ * 418711 + rainZ * 13761 & 0x1F;
-                    yOffset = -((float) x + mc.getFrameTime()) / 32.0f * (3.0f + randomSource.nextFloat());
+                    yOffset = -((float) x + mc.getTimer().getGameTimeDeltaPartialTick(false)) / 32.0f * (3.0f + randomSource.nextFloat());
                 } else if (precipitation == Biome.Precipitation.SNOW) {
                     if (count != 1) {
                         if (count >= 0) {
-                            tesselator.end();
+                            BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
                         }
                         count = 1;
                         RenderSystem.setShaderTexture(0, SNOW_LOCATION);
-                        bufferBuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.PARTICLE);
+                        bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.PARTICLE);
                     }
 
                     blend = ((1.0f - distance * distance) * 0.3f + 0.5f);
                     xOffset = (float) (randomSource.nextDouble() + (double) rainAnimationTime * 0.01 * (double) ((float) randomSource.nextGaussian()));
-                    float ae = -((float) (this.ticks & 0x1FF) + mc.getFrameTime()) / 512.0f;
+                    float ae = -((float) (this.ticks & 0x1FF) + mc.getTimer().getGameTimeDeltaPartialTick(false)) / 512.0f;
                     float af = (float) (randomSource.nextDouble() + (double) (rainAnimationTime * (float) randomSource.nextGaussian()) * 0.001);
                     yOffset = ae + af;
 
@@ -1097,27 +1108,27 @@ public class MenuWorldRenderer {
                     continue;
                 }
                 bufferBuilder
-                    .vertex(localX - r, (double) upper - inY, localZ - s)
-                    .uv(0.0f + xOffset, (float) lower * 0.25f + yOffset)
-                    .color(1.0f, 1.0f, 1.0f, blend).uv2(blockLight, skyLight).endVertex();
+                    .addVertex((float) (localX - r),  upper - (float) inY, (float) (localZ - s))
+                    .setUv(0.0f + xOffset, (float) lower * 0.25f + yOffset)
+                    .setColor(1.0f, 1.0f, 1.0f, blend).setUv2(blockLight, skyLight);
                 bufferBuilder
-                    .vertex(localX + r, (double) upper - inY, localZ + s)
-                    .uv(1.0f + xOffset, (float) lower * 0.25f + yOffset)
-                    .color(1.0f, 1.0f, 1.0f, blend).uv2(blockLight, skyLight).endVertex();
+                    .addVertex((float) (localX + r),  upper - (float) inY, (float) (localZ + s))
+                    .setUv(1.0f + xOffset, (float) lower * 0.25f + yOffset)
+                    .setColor(1.0f, 1.0f, 1.0f, blend).setUv2(blockLight, skyLight);
                 bufferBuilder
-                    .vertex(localX + r, (double) lower - inY, localZ + s)
-                    .uv(1.0f + xOffset, (float) upper * 0.25f + yOffset)
-                    .color(1.0f, 1.0f, 1.0f, blend).uv2(blockLight, skyLight).endVertex();
+                    .addVertex((float) (localX + r), lower - (float) inY, (float) (localZ + s))
+                    .setUv(1.0f + xOffset, (float) upper * 0.25f + yOffset)
+                    .setColor(1.0f, 1.0f, 1.0f, blend).setUv2(blockLight, skyLight);
                 bufferBuilder
-                    .vertex(localX - r, (double) lower - inY, localZ - s)
-                    .uv(0.0f + xOffset, (float) upper * 0.25f + yOffset)
-                    .color(1.0f, 1.0f, 1.0f, blend).uv2(blockLight, skyLight).endVertex();
+                    .addVertex((float) (localX - r),  lower - (float) inY, (float) (localZ - s))
+                    .setUv(0.0f + xOffset, (float) upper * 0.25f + yOffset)
+                    .setColor(1.0f, 1.0f, 1.0f, blend).setUv2(blockLight, skyLight);
             }
         }
         if (count >= 0) {
-            tesselator.end();
+            BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
         }
-        RenderSystem.getModelViewStack().popPose();
+        RenderSystem.getModelViewStack().popMatrix();
         RenderSystem.applyModelViewMatrix();
         RenderSystem.enableCull();
         RenderSystem.disableBlend();
@@ -1198,7 +1209,7 @@ public class MenuWorldRenderer {
             skyColorB = skyColorB * darkening + luminance * (1.0f - darkening);
         }
         if (!mc.options.hideLightningFlash().get() && this.skyFlashTime > 0) {
-            float flash = (float) this.skyFlashTime - mc.getFrameTime();
+            float flash = (float) this.skyFlashTime - mc.getTimer().getGameTimeDeltaPartialTick(false);
             if (flash > 1.0f) {
                 flash = 1.0f;
             }
@@ -1248,103 +1259,75 @@ public class MenuWorldRenderer {
         return new Vec3(r, g, b);
     }
 
-    private void generateSky() {
-        Tesselator tesselator = Tesselator.getInstance();
-        BufferBuilder bufferBuilder = tesselator.getBuilder();
-        if (this.skyVBO != null) {
-            this.skyVBO.close();
+    private void generateLightSky() {
+        if (this.skyBuffer != null) {
+            this.skyBuffer.close();
         }
-        this.skyVBO = new VertexBuffer(VertexBuffer.Usage.STATIC);
-        BufferBuilder.RenderedBuffer renderedBuffer = buildSkyDisc(bufferBuilder, 16.0f);
-        this.skyVBO.bind();
-        this.skyVBO.upload(renderedBuffer);
+        this.skyBuffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+        this.skyBuffer.bind();
+        this.skyBuffer.upload(buildSkyDisc(Tesselator.getInstance(), 16.0f));
         VertexBuffer.unbind();
     }
 
-    private void generateSky2() {
-        Tesselator tesselator = Tesselator.getInstance();
-        BufferBuilder bufferBuilder = tesselator.getBuilder();
-        if (this.sky2VBO != null) {
-            this.sky2VBO.close();
+    private void generateDarkSky() {
+        if (this.darkBuffer != null) {
+            this.darkBuffer.close();
         }
-        this.sky2VBO = new VertexBuffer(VertexBuffer.Usage.STATIC);
-        BufferBuilder.RenderedBuffer renderedBuffer = buildSkyDisc(bufferBuilder, -16.0f);
-        this.sky2VBO.bind();
-        this.sky2VBO.upload(renderedBuffer);
+        this.darkBuffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+        this.darkBuffer.bind();
+        this.darkBuffer.upload(buildSkyDisc(Tesselator.getInstance(), -16.0f));
         VertexBuffer.unbind();
     }
 
-    private static BufferBuilder.RenderedBuffer buildSkyDisc(BufferBuilder bufferBuilder, float posY) {
+    private static MeshData buildSkyDisc(Tesselator tesselator, float posY) {
         float g = Math.signum(posY) * 512.0f;
         float h = 512.0f;
         RenderSystem.setShader(GameRenderer::getPositionShader);
-        bufferBuilder.begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION);
-        bufferBuilder.vertex(0.0, posY, 0.0).endVertex();
+        BufferBuilder bufferBuilder = tesselator.begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION);
+        bufferBuilder.addVertex(0.0F, posY, 0.0F);
         for (int i = -180; i <= 180; i += 45) {
-            bufferBuilder.vertex(g * Mth.cos((float) i * ((float) Math.PI / 180)), posY, 512.0f * Mth.sin((float) i * ((float) Math.PI / 180))).endVertex();
+            bufferBuilder.addVertex(g * Mth.cos((float) i * ((float) Math.PI / 180)), posY, 512.0f * Mth.sin((float) i * ((float) Math.PI / 180)));
         }
-        return bufferBuilder.end();
+        return bufferBuilder.buildOrThrow();
     }
 
-    private void generateStars() {
-        Tesselator tesselator = Tesselator.getInstance();
-        BufferBuilder bufferBuilder = tesselator.getBuilder();
+    private void createStars() {
         RenderSystem.setShader(GameRenderer::getPositionShader);
         if (this.starVBO != null) {
             this.starVBO.close();
         }
         this.starVBO = new VertexBuffer(VertexBuffer.Usage.STATIC);
-        BufferBuilder.RenderedBuffer renderedBuffer = this.buildStars(bufferBuilder);
         this.starVBO.bind();
-        this.starVBO.upload(renderedBuffer);
+        this.starVBO.upload(this.drawStars(Tesselator.getInstance()));
         VertexBuffer.unbind();
     }
 
-    private BufferBuilder.RenderedBuffer buildStars(BufferBuilder bufferBuilderIn) {
-        Random random = new Random(10842L);
-        bufferBuilderIn.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION);
+    private MeshData drawStars(Tesselator tesselator) {
+        RandomSource randomSource = RandomSource.create(10842L);
+        BufferBuilder bufferBuilder = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION);
 
-        for (int i = 0; i < 1500; ++i) {
-            double d0 = random.nextFloat() * 2.0F - 1.0F;
-            double d1 = random.nextFloat() * 2.0F - 1.0F;
-            double d2 = random.nextFloat() * 2.0F - 1.0F;
-            double d3 = 0.15F + random.nextFloat() * 0.1F;
-            double d4 = d0 * d0 + d1 * d1 + d2 * d2;
+        int starCount = 1500;
+        float starDistance = 100.0F;
 
-            if (d4 < 1.0D && d4 > 0.01D) {
-                d4 = 1.0D / Math.sqrt(d4);
-                d0 = d0 * d4;
-                d1 = d1 * d4;
-                d2 = d2 * d4;
-                double d5 = d0 * 100.0D;
-                double d6 = d1 * 100.0D;
-                double d7 = d2 * 100.0D;
-                double d8 = Math.atan2(d0, d2);
-                double d9 = Math.sin(d8);
-                double d10 = Math.cos(d8);
-                double d11 = Math.atan2(Math.sqrt(d0 * d0 + d2 * d2), d1);
-                double d12 = Math.sin(d11);
-                double d13 = Math.cos(d11);
-                double d14 = random.nextDouble() * Math.PI * 2.0D;
-                double d15 = Math.sin(d14);
-                double d16 = Math.cos(d14);
+        for (int i = 0; i < starCount; i++) {
+            Vector3f starPoint = new Vector3f(randomSource.nextFloat(), randomSource.nextFloat(), randomSource.nextFloat()).mul(2.0F).sub(1.0F, 1.0F, 1.0F);
+            float starSize = 0.15F + randomSource.nextFloat() * 0.1F;
+            float distance = starPoint.lengthSquared();
+            if (distance <= 0.010000001F || distance >= 1.0F) continue;
 
-                for (int j = 0; j < 4; ++j) {
-                    double d17 = 0.0D;
-                    double d18 = (double) ((j & 2) - 1) * d3;
-                    double d19 = (double) ((j + 1 & 2) - 1) * d3;
-                    double d20 = 0.0D;
-                    double d21 = d18 * d16 - d19 * d15;
-                    double d22 = d19 * d16 + d18 * d15;
-                    double d23 = d21 * d12 + 0.0D * d13;
-                    double d24 = 0.0D * d12 - d21 * d13;
-                    double d25 = d24 * d9 - d22 * d10;
-                    double d26 = d22 * d9 + d24 * d10;
-                    bufferBuilderIn.vertex(d5 + d25, d6 + d23, d7 + d26).endVertex();
-                }
-            }
+            starPoint = starPoint.normalize(starDistance);
+            float starRotation = (float)(randomSource.nextDouble() * Math.PI * 2.0);
+
+            Quaternionf quaternionf = new Quaternionf()
+                .rotateTo(new Vector3f(0.0F, 0.0F, -1.0F), starPoint)
+                .rotateZ(starRotation);
+
+            bufferBuilder.addVertex(starPoint.add(new Vector3f(starSize, -starSize, 0.0F).rotate(quaternionf)));
+            bufferBuilder.addVertex(starPoint.add(new Vector3f(starSize, starSize, 0.0F).rotate(quaternionf)));
+            bufferBuilder.addVertex(starPoint.add(new Vector3f(-starSize, starSize, 0.0F).rotate(quaternionf)));
+            bufferBuilder.addVertex(starPoint.add(new Vector3f(-starSize, -starSize, 0.0F).rotate(quaternionf)));
         }
-        return bufferBuilderIn.end();
+        return bufferBuilder.buildOrThrow();
     }
 
     public void turnOffLightLayer() {
@@ -1776,7 +1759,7 @@ public class MenuWorldRenderer {
 
         @SuppressWarnings("unchecked")
         public FluidStateWrapper(FluidState fluidState) {
-            super(fluidState.getType(), fluidState.getValues(), fluidState.propertiesCodec);
+            super(fluidState.getType(), (Reference2ObjectArrayMap<Property<?>, Comparable<?>>) fluidState.getValues(), fluidState.propertiesCodec);
 
             this.fluidState = fluidState;
         }

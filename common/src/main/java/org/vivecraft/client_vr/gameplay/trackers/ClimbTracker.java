@@ -4,8 +4,10 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.resources.model.ModelResourceLocation;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.item.ItemStack;
@@ -29,7 +31,7 @@ import org.vivecraft.common.network.CommonNetworkHelper;
 import java.util.*;
 
 public class ClimbTracker extends Tracker {
-    public static final ModelResourceLocation clawsModel = new ModelResourceLocation("vivecraft", "climb_claws", "inventory");
+    public static final ModelResourceLocation clawsModel = new ModelResourceLocation(ResourceLocation.fromNamespaceAndPath("vivecraft", "item/climb_claws"), "standalone");
     private final boolean[] latched = new boolean[2];
     private final boolean[] wasinblock = new boolean[2];
     private final boolean[] wasbutton = new boolean[2];
@@ -79,11 +81,11 @@ public class ClimbTracker extends Tracker {
     public boolean isClaws(ItemStack i) {
         if (i.isEmpty()) {
             return false;
-        } else if (!i.hasCustomHoverName()) {
+        } else if (!i.has(DataComponents.CUSTOM_NAME)) {
             return false;
         } else if (i.getItem() != Items.SHEARS) {
             return false;
-        } else if (!i.hasTag() || !i.getTag().getBoolean("Unbreakable")) {
+        } else if (!i.has(DataComponents.UNBREAKABLE)) {
             return false;
         } else {
             return i.getHoverName().getContents() instanceof TranslatableContents && ((TranslatableContents) i.getHoverName().getContents()).getKey().equals("vivecraft.item.climbclaws") || i.getHoverName().getString().equals("Climb Claws");

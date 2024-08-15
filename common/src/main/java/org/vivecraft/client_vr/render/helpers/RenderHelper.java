@@ -4,6 +4,8 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
+import com.mojang.math.Axis;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -17,17 +19,18 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
+import org.joml.Matrix4fStack;
 import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL43C;
 import org.vivecraft.client.extensions.RenderTargetExtension;
 import org.vivecraft.client_vr.ClientDataHolderVR;
-import org.vivecraft.client_vr.MethodHolder;
 import org.vivecraft.client_vr.VRData;
 import org.vivecraft.client_vr.gameplay.trackers.TelescopeTracker;
 import org.vivecraft.client_vr.provider.MCVR;
 import org.vivecraft.client_vr.render.RenderPass;
 import org.vivecraft.mixin.client.blaze3d.RenderSystemAccessor;
+import org.vivecraft.mod_compat_vr.ShadersHelper;
 
 import java.util.function.Supplier;
 
@@ -56,6 +59,18 @@ public class RenderHelper {
         }
         poseStack.last().pose().mul(modelView);
         poseStack.last().normal().mul(new Matrix3f(modelView));
+    }
+
+    public static void applyVRModelView(RenderPass currentPass, Matrix4f matrix) {
+        Matrix4f modelView;
+        if (currentPass == RenderPass.CENTER && dataHolder.vrSettings.displayMirrorCenterSmooth > 0.0F) {
+            modelView = new Matrix4f().rotation(MCVR.get().hmdRotHistory
+                .averageRotation(dataHolder.vrSettings.displayMirrorCenterSmooth));
+        } else {
+            modelView = dataHolder.vrPlayer.vrdata_world_render.getEye(currentPass)
+                .getMatrix().transposed().toMCMatrix();
+        }
+        matrix.mul(modelView);
     }
 
     public static Vec3 getSmoothCameraPosition(RenderPass renderpass, VRData vrData) {
@@ -121,19 +136,19 @@ public class RenderHelper {
         }
     }
 
-    public static void setupRenderingAtController(int controller, PoseStack matrix) {
+    public static void setupRenderingAtController(int controller, Matrix4f matrix) {
         Vec3 aimSource = getControllerRenderPos(controller);
         aimSource = aimSource.subtract(
             getSmoothCameraPosition(dataHolder.currentPass, dataHolder.vrPlayer.getVRDataWorld()));
-        matrix.translate(aimSource.x, aimSource.y, aimSource.z);
+        matrix.translate((float) aimSource.x, (float) aimSource.y, (float) aimSource.z);
         float sc = dataHolder.vrPlayer.vrdata_world_render.worldScale;
         if (dataHolder.vrSettings.seated && mc.level != null && TelescopeTracker.isTelescope(mc.player.getUseItem()) && TelescopeTracker.isTelescope(controller == 0 ? mc.player.getMainHandItem() : mc.player.getOffhandItem())) {
-            matrix.mulPoseMatrix(dataHolder.vrPlayer.vrdata_world_render.hmd.getMatrix().inverted()
+            matrix.mul(dataHolder.vrPlayer.vrdata_world_render.hmd.getMatrix().inverted()
                 .transposed().toMCMatrix());
-            MethodHolder.rotateDegXp(matrix, 90);
-            matrix.translate(controller == (dataHolder.vrSettings.reverseHands ? 1 : 0) ? 0.075 * sc : -0.075 * sc, -0.025 * sc, 0.0325 * sc);
+            matrix.rotate(Axis.XP.rotationDegrees(90));
+            matrix.translate(controller == (dataHolder.vrSettings.reverseHands ? 1 : 0) ? 0.075F * sc : -0.075F * sc, -0.025F * sc, 0.0325F * sc);
         } else {
-            matrix.mulPoseMatrix(dataHolder.vrPlayer.vrdata_world_render.getController(controller)
+            matrix.mul(dataHolder.vrPlayer.vrdata_world_render.getController(controller)
                 .getMatrix().inverted().transposed().toMCMatrix());
         }
 
@@ -142,7 +157,7 @@ public class RenderHelper {
 
     public static void renderDebugAxes(int r, int g, int b, float radius) {
         setupPolyRendering(true);
-        RenderSystem.setShaderTexture(0, new ResourceLocation("vivecraft:textures/white.png"));
+        RenderSystem.setShaderTexture(0, ResourceLocation.parse("vivecraft:textures/white.png"));
         renderCircle(new Vec3(0.0D, 0.0D, 0.0D), radius, 32, r, g, b, 255, 0);
         renderCircle(new Vec3(0.0D, 0.01D, 0.0D), radius * 0.75F, 32, r, g, b, 255, 0);
         renderCircle(new Vec3(0.0D, 0.02D, 0.0D), radius * 0.25F, 32, r, g, b, 255, 0);
@@ -151,9 +166,8 @@ public class RenderHelper {
     }
 
     public static void renderCircle(Vec3 pos, float radius, int edges, int r, int g, int b, int a, int side) {
-        Tesselator tesselator = Tesselator.getInstance();
-        tesselator.getBuilder().begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_COLOR);
-        tesselator.getBuilder().vertex(pos.x, pos.y, pos.z).color(r, g, b, a).endVertex();
+        BufferBuilder bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_COLOR);
+        bufferBuilder.addVertex((float) pos.x, (float) pos.y, (float) pos.z).setColor(r, g, b, a);
 
         for (int i = 0; i < edges + 1; i++) {
             float startAngle = (float) i / (float) edges * (float) Math.PI * 2.0F;
@@ -161,20 +175,20 @@ public class RenderHelper {
                 float x = (float) pos.x + (float) Math.cos(startAngle) * radius;
                 float y = (float) pos.y;
                 float z = (float) pos.z + (float) Math.sin(startAngle) * radius;
-                tesselator.getBuilder().vertex(x, y, z).color(r, g, b, a).endVertex();
+                bufferBuilder.addVertex(x, y, z).setColor(r, g, b, a);
             } else if (side == 2 || side == 3) { //z
                 float x = (float) pos.x + (float) Math.cos(startAngle) * radius;
                 float y = (float) pos.y + (float) Math.sin(startAngle) * radius;
                 float z = (float) pos.z;
-                tesselator.getBuilder().vertex(x, y, z).color(r, g, b, a).endVertex();
+                bufferBuilder.addVertex(x, y, z).setColor(r, g, b, a);
             } else if (side == 4 || side == 5) { //x
                 float x = (float) pos.x;
                 float y = (float) pos.y + (float) Math.cos(startAngle) * radius;
                 float z = (float) pos.z + (float) Math.sin(startAngle) * radius;
-                tesselator.getBuilder().vertex(x, y, z).color(r, g, b, a).endVertex();
+                bufferBuilder.addVertex(x, y, z).setColor(r, g, b, a);
             }
         }
-        tesselator.end();
+        BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
     }
 
     public static void setupPolyRendering(boolean enable) {
@@ -224,11 +238,11 @@ public class RenderHelper {
         }
     }
 
-    public static void drawScreen(float f, Screen screen, GuiGraphics guiGraphics) {
-        PoseStack posestack = RenderSystem.getModelViewStack();
-        posestack.pushPose();
-        posestack.setIdentity();
-        posestack.translate(0.0D, 0.0D, -11000.0D);
+    public static void drawScreen(DeltaTracker.Timer timer, Screen screen, GuiGraphics guiGraphics) {
+        Matrix4fStack posestack = RenderSystem.getModelViewStack();
+        posestack.pushMatrix();
+        posestack.identity();
+        posestack.translate(0.0F, 0.0F, -11000.0F);
         RenderSystem.applyModelViewMatrix();
 
         Matrix4f guiProjection = (new Matrix4f()).setOrtho(
@@ -243,7 +257,7 @@ public class RenderHelper {
             GlStateManager.SourceFactor.ONE,
             GlStateManager.DestFactor.ONE);
 
-        screen.render(guiGraphics, 0, 0, f);
+        screen.render(guiGraphics, 0, 0, timer.getRealtimeDeltaTicks());
 
         RenderSystem.blendFuncSeparate(
             GlStateManager.SourceFactor.SRC_ALPHA,
@@ -251,7 +265,7 @@ public class RenderHelper {
             GlStateManager.SourceFactor.ONE,
             GlStateManager.DestFactor.ONE);
 
-        posestack.popPose();
+        posestack.popMatrix();
         RenderSystem.applyModelViewMatrix();
 
         RenderTarget main = mc.getMainRenderTarget();
@@ -268,29 +282,24 @@ public class RenderHelper {
     public static void drawSizedQuad(float displayWidth, float displayHeight, float size, float[] color) {
         float aspect = displayHeight / displayWidth;
 
-        BufferBuilder bufferbuilder = Tesselator.getInstance().getBuilder();
-        bufferbuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL);
-        bufferbuilder.vertex((-(size / 2.0F)), (-(size * aspect) / 2.0F), 0.0D)
-            .uv(0.0F, 0.0F)
-            .color(color[0], color[1], color[2], color[3])
-            .normal(0.0F, 0.0F, 1.0F)
-            .endVertex();
-        bufferbuilder.vertex((size / 2.0F), (-(size * aspect) / 2.0F), 0.0D)
-            .uv(1.0F, 0.0F)
-            .color(color[0], color[1], color[2], color[3])
-            .normal(0.0F, 0.0F, 1.0F)
-            .endVertex();
-        bufferbuilder.vertex((size / 2.0F), (size * aspect / 2.0F), 0.0D)
-            .uv(1.0F, 1.0F)
-            .color(color[0], color[1], color[2], color[3])
-            .normal(0.0F, 0.0F, 1.0F)
-            .endVertex();
-        bufferbuilder.vertex((-(size / 2.0F)), (size * aspect / 2.0F), 0.0D)
-            .uv(0.0F, 1.0F)
-            .color(color[0], color[1], color[2], color[3])
-            .normal(0.0F, 0.0F, 1.0F)
-            .endVertex();
-        BufferUploader.drawWithShader(bufferbuilder.end());
+        BufferBuilder bufferbuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL);
+        bufferbuilder.addVertex((-(size / 2.0F)), (-(size * aspect) / 2.0F), 0.0F)
+            .setUv(0.0F, 0.0F)
+            .setColor(color[0], color[1], color[2], color[3])
+            .setNormal(0.0F, 0.0F, 1.0F);
+        bufferbuilder.addVertex((size / 2.0F), (-(size * aspect) / 2.0F), 0.0F)
+            .setUv(1.0F, 0.0F)
+            .setColor(color[0], color[1], color[2], color[3])
+            .setNormal(0.0F, 0.0F, 1.0F);
+        bufferbuilder.addVertex((size / 2.0F), (size * aspect / 2.0F), 0.0F)
+            .setUv(1.0F, 1.0F)
+            .setColor(color[0], color[1], color[2], color[3])
+            .setNormal(0.0F, 0.0F, 1.0F);
+        bufferbuilder.addVertex((-(size / 2.0F)), (size * aspect / 2.0F), 0.0F)
+            .setUv(0.0F, 1.0F)
+            .setColor(color[0], color[1], color[2], color[3])
+            .setNormal(0.0F, 0.0F, 1.0F);
+        BufferUploader.drawWithShader(bufferbuilder.buildOrThrow());
     }
 
     public static void drawSizedQuad(float displayWidth, float displayHeight, float size, float[] color, Matrix4f pMatrix) {
@@ -298,25 +307,20 @@ public class RenderHelper {
 
         RenderSystem.setShader(GameRenderer::getPositionTexShader);
         RenderSystem.setShaderColor(color[0], color[1], color[2], color[3]);
-        BufferBuilder bufferbuilder = Tesselator.getInstance().getBuilder();
-        bufferbuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
+        BufferBuilder bufferbuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
         bufferbuilder
-            .vertex(pMatrix, (-(size / 2.0F)), (-(size * aspect) / 2.0F), 0)
-            .uv(0.0F, 0.0F)
-            .endVertex();
+            .addVertex(pMatrix, (-(size / 2.0F)), (-(size * aspect) / 2.0F), 0)
+            .setUv(0.0F, 0.0F);
         bufferbuilder
-            .vertex(pMatrix, (size / 2.0F), (-(size * aspect) / 2.0F), 0)
-            .uv(1.0F, 0.0F)
-            .endVertex();
+            .addVertex(pMatrix, (size / 2.0F), (-(size * aspect) / 2.0F), 0)
+            .setUv(1.0F, 0.0F);
         bufferbuilder
-            .vertex(pMatrix, (size / 2.0F), (size * aspect / 2.0F), 0)
-            .uv(1.0F, 1.0F)
-            .endVertex();
+            .addVertex(pMatrix, (size / 2.0F), (size * aspect / 2.0F), 0)
+            .setUv(1.0F, 1.0F);
         bufferbuilder
-            .vertex(pMatrix, (-(size / 2.0F)), (size * aspect / 2.0F), 0)
-            .uv(0.0F, 1.0F)
-            .endVertex();
-        BufferUploader.drawWithShader(bufferbuilder.end());
+            .addVertex(pMatrix, (-(size / 2.0F)), (size * aspect / 2.0F), 0)
+            .setUv(0.0F, 1.0F);
+        BufferUploader.drawWithShader(bufferbuilder.buildOrThrow());
         RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
     }
 
@@ -340,42 +344,44 @@ public class RenderHelper {
         RenderSystem.setShader(shader);
         mc.gameRenderer.lightTexture().turnOnLightLayer();
         mc.gameRenderer.overlayTexture().setupOverlayColor();
-        BufferBuilder bufferbuilder = Tesselator.getInstance().getBuilder();
-        bufferbuilder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
+        BufferBuilder bufferbuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
 
         // store old lights
         Vector3f light0Old = RenderSystemAccessor.getShaderLightDirections()[0];
         Vector3f light1Old = RenderSystemAccessor.getShaderLightDirections()[1];
 
+        Vector3f normal = new Vector3f(0, 0, 1);
+
+        // weird iris behaviour
+        if (ShadersHelper.isShaderActive()) {
+            normal = new Matrix3f(pMatrix).transform(normal);
+        }
+
         // set lights to front
-        RenderSystem.setShaderLights(new Vector3f(0, 0, 1), new Vector3f(0, 0, 1));
+        RenderSystem.setShaderLights(normal, normal);
         RenderSystem.setupShaderLights(RenderSystem.getShader());
 
-        bufferbuilder.vertex(pMatrix, (-(size / 2.0F)), (-(size * aspect) / 2.0F), 0)
-            .color(color[0], color[1], color[2], color[3])
-            .uv(0.0F, flipY ? 1.0F : 0.0F)
-            .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(lighti)
-            .normal(0, 0, 1)
-            .endVertex();
-        bufferbuilder.vertex(pMatrix, (size / 2.0F), (-(size * aspect) / 2.0F), 0)
-            .color(color[0], color[1], color[2], color[3])
-            .uv(1.0F, flipY ? 1.0F : 0.0F)
-            .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(lighti)
-            .normal(0, 0, 1)
-            .endVertex();
-        bufferbuilder.vertex(pMatrix, (size / 2.0F), (size * aspect / 2.0F), 0)
-            .color(color[0], color[1], color[2], color[3])
-            .uv(1.0F, flipY ? 0.0F : 1.0F)
-            .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(lighti)
-            .normal(0, 0, 1)
-            .endVertex();
-        bufferbuilder.vertex(pMatrix, (-(size / 2.0F)), (size * aspect / 2.0F), 0)
-            .color(color[0], color[1], color[2], color[3])
-            .uv(0.0F, flipY ? 0.0F : 1.0F)
-            .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(lighti)
-            .normal(0, 0, 1)
-            .endVertex();
-        BufferUploader.drawWithShader(bufferbuilder.end());
+        bufferbuilder.addVertex(pMatrix, (-(size / 2.0F)), (-(size * aspect) / 2.0F), 0)
+            .setColor(color[0], color[1], color[2], color[3])
+            .setUv(0.0F, flipY ? 1.0F : 0.0F)
+            .setOverlay(OverlayTexture.NO_OVERLAY).setLight(lighti)
+            .setNormal(0, 0, 1);
+        bufferbuilder.addVertex(pMatrix, (size / 2.0F), (-(size * aspect) / 2.0F), 0)
+            .setColor(color[0], color[1], color[2], color[3])
+            .setUv(1.0F, flipY ? 1.0F : 0.0F)
+            .setOverlay(OverlayTexture.NO_OVERLAY).setLight(lighti)
+            .setNormal(0, 0, 1);
+        bufferbuilder.addVertex(pMatrix, (size / 2.0F), (size * aspect / 2.0F), 0)
+            .setColor(color[0], color[1], color[2], color[3])
+            .setUv(1.0F, flipY ? 0.0F : 1.0F)
+            .setOverlay(OverlayTexture.NO_OVERLAY).setLight(lighti)
+            .setNormal(0, 0, 1);
+        bufferbuilder.addVertex(pMatrix, (-(size / 2.0F)), (size * aspect / 2.0F), 0)
+            .setColor(color[0], color[1], color[2], color[3])
+            .setUv(0.0F, flipY ? 0.0F : 1.0F)
+            .setOverlay(OverlayTexture.NO_OVERLAY).setLight(lighti)
+            .setNormal(0, 0, 1);
+        BufferUploader.drawWithShader(bufferbuilder.buildOrThrow());
 
         mc.gameRenderer.lightTexture().turnOffLightLayer();
 
@@ -386,26 +392,24 @@ public class RenderHelper {
         }
     }
 
-    public static void renderFlatQuad(Vec3 pos, float width, float height, float yaw, int r, int g, int b, int a, PoseStack poseStack) {
-        Tesselator tesselator = Tesselator.getInstance();
-        tesselator.getBuilder().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_NORMAL);
+    public static void renderFlatQuad(Vec3 pos, float width, float height, float yaw, int r, int g, int b, int a, Matrix4f mat) {
+        BufferBuilder bufferbuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_NORMAL);
 
         Vec3 offset = (new Vec3((width / 2.0F), 0.0, height / 2.0F))
             .yRot((float) Math.toRadians(-yaw));
 
-        Matrix4f mat = poseStack.last().pose();
-        tesselator.getBuilder().vertex(mat, (float) (pos.x + offset.x), (float) pos.y, (float) (pos.z + offset.z))
-            .color(r, g, b, a).normal(0.0F, 1.0F, 0.0F).endVertex();
-        tesselator.getBuilder().vertex(mat, (float) (pos.x + offset.x), (float) pos.y, (float) (pos.z - offset.z))
-            .color(r, g, b, a).normal(0.0F, 1.0F, 0.0F).endVertex();
-        tesselator.getBuilder().vertex(mat, (float) (pos.x - offset.x), (float) pos.y, (float) (pos.z - offset.z))
-            .color(r, g, b, a).normal(0.0F, 1.0F, 0.0F).endVertex();
-        tesselator.getBuilder().vertex(mat, (float) (pos.x - offset.x), (float) pos.y, (float) (pos.z + offset.z))
-            .color(r, g, b, a).normal(0.0F, 1.0F, 0.0F).endVertex();
-        tesselator.end();
+        bufferbuilder.addVertex(mat, (float) (pos.x + offset.x), (float) pos.y, (float) (pos.z + offset.z))
+            .setColor(r, g, b, a).setNormal(0.0F, 1.0F, 0.0F);
+        bufferbuilder.addVertex(mat, (float) (pos.x + offset.x), (float) pos.y, (float) (pos.z - offset.z))
+            .setColor(r, g, b, a).setNormal(0.0F, 1.0F, 0.0F);
+        bufferbuilder.addVertex(mat, (float) (pos.x - offset.x), (float) pos.y, (float) (pos.z - offset.z))
+            .setColor(r, g, b, a).setNormal(0.0F, 1.0F, 0.0F);
+        bufferbuilder.addVertex(mat, (float) (pos.x - offset.x), (float) pos.y, (float) (pos.z + offset.z))
+            .setColor(r, g, b, a).setNormal(0.0F, 1.0F, 0.0F);
+        BufferUploader.drawWithShader(bufferbuilder.buildOrThrow());
     }
 
-    public static void renderBox(Tesselator tes, Vec3 start, Vec3 end, float minX, float maxX, float minY, float maxY, Vec3i color, byte alpha, PoseStack poseStack) {
+    public static void renderBox(BufferBuilder bufferbuilder, Vec3 start, Vec3 end, float minX, float maxX, float minY, float maxY, Vec3i color, byte alpha, Matrix4f mat) {
         Vec3 forward = start.subtract(end).normalize();
         Vec3 right = forward.cross(new Vec3(0.0D, 1.0D, 0.0D));
         Vec3 up = right.cross(forward);
@@ -428,9 +432,6 @@ public class RenderHelper {
         Vec3 frontRightTop = end.add(right.x + up.x, right.y + up.y, right.z + up.z);
         Vec3 frontLeftBottom = end.add(left.x + down.x, left.y + down.y, left.z + down.z);
         Vec3 frontLeftTop = end.add(left.x + up.x, left.y + up.y, left.z + up.z);
-
-        BufferBuilder bufferbuilder = tes.getBuilder();
-        Matrix4f mat = poseStack.last().pose();
 
         addVertex(bufferbuilder, mat, backRightBottom, color, alpha, forward);
         addVertex(bufferbuilder, mat, backLeftBottom, color, alpha, forward);
@@ -467,9 +468,8 @@ public class RenderHelper {
     }
 
     private static void addVertex(BufferBuilder buff, Matrix4f mat, Vec3 pos, Vec3i color, int alpha, Vec3 normal) {
-        buff.vertex(mat, (float) pos.x, (float) pos.y, (float) pos.z)
-            .color(color.getX(), color.getY(), color.getZ(), alpha)
-            .normal((float) normal.x, (float) normal.y, (float) normal.z)
-            .endVertex();
+        buff.addVertex(mat, (float) pos.x, (float) pos.y, (float) pos.z)
+            .setColor(color.getX(), color.getY(), color.getZ(), alpha)
+            .setNormal((float) normal.x, (float) normal.y, (float) normal.z);
     }
 }

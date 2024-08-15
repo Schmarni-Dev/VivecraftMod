@@ -20,6 +20,9 @@ public class ItemTags {
 
     public final static TagKey<Item> VIVECRAFT_HOES = tag("hoes");
 
+    public final static TagKey<Item> VIVECRAFT_MACES = tag("maces");
+
+
     public final static TagKey<Item> VIVECRAFT_MAPS = tag("maps");
 
     public final static TagKey<Item> VIVECRAFT_SCYTHES = tag("scythes");
@@ -39,6 +42,6 @@ public class ItemTags {
     public final static TagKey<Item> VIVECRAFT_BOW_EXCLUSION = tag("bow_exclusion");
 
     private static TagKey<Item> tag(String name) {
-        return TagKey.create(Registries.ITEM, new ResourceLocation("vivecraft", name));
+        return TagKey.create(Registries.ITEM, ResourceLocation.fromNamespaceAndPath("vivecraft", name));
     }
 }

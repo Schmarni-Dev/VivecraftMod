@@ -13,6 +13,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11C;
 import org.vivecraft.client.network.ClientNetworking;
 import org.vivecraft.client_vr.ClientDataHolderVR;
@@ -43,7 +44,7 @@ public class VRArmHelper {
     }
 
     public static void renderVRHands(float partialTicks, boolean renderRight, boolean renderLeft, boolean menuHandRight,
-        boolean menuHandLeft, PoseStack poseStack) {
+        boolean menuHandLeft) {
         mc.getProfiler().push("hands");
         // backup projection matrix, not doing that breaks sodium water on 1.19.3
         RenderSystem.backupProjectionMatrix();
@@ -52,13 +53,10 @@ public class VRArmHelper {
             ClientDataHolderVR.ismainhand = true;
 
             if (menuHandRight) {
-                renderMainMenuHand(0, partialTicks, false, poseStack);
+                renderMainMenuHand(0, partialTicks, false);
             } else {
                 ((GameRendererExtension) mc.gameRenderer).vivecraft$resetProjectionMatrix(partialTicks);
-                PoseStack newPoseStack = new PoseStack();
-                newPoseStack.last().pose().identity();
-                RenderHelper.applyVRModelView(dataHolder.currentPass, newPoseStack);
-                renderVRHand_Main(newPoseStack, partialTicks);
+                renderVRHand_Main(new PoseStack(), partialTicks);
             }
 
             ClientDataHolderVR.ismainhand = false;
@@ -66,13 +64,10 @@ public class VRArmHelper {
 
         if (renderLeft) {
             if (menuHandLeft) {
-                renderMainMenuHand(1, partialTicks, false, poseStack);
+                renderMainMenuHand(1, partialTicks, false);
             } else {
                 ((GameRendererExtension) mc.gameRenderer).vivecraft$resetProjectionMatrix(partialTicks);
-                PoseStack newPoseStack = new PoseStack();
-                newPoseStack.last().pose().identity();
-                RenderHelper.applyVRModelView(dataHolder.currentPass, newPoseStack);
-                renderVRHand_Offhand(partialTicks, true, newPoseStack);
+                renderVRHand_Offhand(partialTicks, true, new PoseStack());
             }
         }
 
@@ -80,21 +75,20 @@ public class VRArmHelper {
         mc.getProfiler().pop();
     }
 
-    public static void renderMainMenuHand(int c, float partialTicks, boolean depthAlways, PoseStack poseStack) {
+    public static void renderMainMenuHand(int c, float partialTicks, boolean depthAlways) {
         ((GameRendererExtension) mc.gameRenderer).vivecraft$resetProjectionMatrix(partialTicks);
-        poseStack.pushPose();
-        poseStack.setIdentity();
+
         RenderSystem.enableDepthTest();
         RenderSystem.defaultBlendFunc();
-        RenderHelper.applyVRModelView(dataHolder.currentPass, poseStack);
-        RenderHelper.setupRenderingAtController(c, poseStack);
+
+        Matrix4f modelView = new Matrix4f();
+
+        RenderHelper.setupRenderingAtController(c, modelView);
 
         if (mc.getOverlay() == null) {
-            mc.getTextureManager().bindForSetup(new ResourceLocation("vivecraft:textures/white.png"));
-            RenderSystem.setShaderTexture(0, new ResourceLocation("vivecraft:textures/white.png"));
+            mc.getTextureManager().bindForSetup(ResourceLocation.parse("vivecraft:textures/white.png"));
+            RenderSystem.setShaderTexture(0, ResourceLocation.parse("vivecraft:textures/white.png"));
         }
-
-        Tesselator tesselator = Tesselator.getInstance();
 
         if (depthAlways && c == 0) {
             RenderSystem.depthFunc(GL11C.GL_ALWAYS);
@@ -125,16 +119,16 @@ public class VRArmHelper {
                 Mth.floor(color.getZ() * lightPercent));
         }
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
-        tesselator.getBuilder().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_NORMAL);
-        RenderHelper.renderBox(tesselator, start, end, -0.02F, 0.02F, -0.0125F, 0.0125F, color, alpha, poseStack);
-        BufferUploader.drawWithShader(tesselator.getBuilder().end());
-        poseStack.popPose();
+        BufferBuilder bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_NORMAL);
+        RenderHelper.renderBox(bufferBuilder, start, end, -0.02F, 0.02F, -0.0125F, 0.0125F, color, alpha, modelView);
+        BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
+
         RenderSystem.depthFunc(GL11C.GL_LEQUAL);
     }
 
     public static void renderVRHand_Main(PoseStack poseStack, float partialTicks) {
         poseStack.pushPose();
-        RenderHelper.setupRenderingAtController(0, poseStack);
+        RenderHelper.setupRenderingAtController(0, poseStack.last().pose());
         ItemStack item = mc.player.getMainHandItem();
         ItemStack override = null; // this.minecraft.physicalGuiManager.getHeldItemOverride();
 
@@ -197,7 +191,7 @@ public class VRArmHelper {
 
     public static void renderVRHand_Offhand(float partialTicks, boolean renderTeleport, PoseStack poseStack) {
         poseStack.pushPose();
-        RenderHelper.setupRenderingAtController(1, poseStack);
+        RenderHelper.setupRenderingAtController(1, poseStack.last().pose());
         ItemStack item = mc.player.getOffhandItem();
         ItemStack override = null;// this.minecraft.physicalGuiManager.getOffhandOverride();
 
@@ -241,9 +235,6 @@ public class VRArmHelper {
         poseStack.popPose();
 
         if (renderTeleport) {
-            poseStack.pushPose();
-            poseStack.setIdentity();
-            RenderHelper.applyVRModelView(dataHolder.currentPass, poseStack);
 //			net.optifine.shaders.Program program = Shaders.activeProgram; TODO
 
 //			if (Config.isShaders()) {
@@ -261,7 +252,7 @@ public class VRArmHelper {
                 && dataHolder.teleportTracker.vrMovementStyle.arcAiming
                 && !dataHolder.bowTracker.isActive(mc.player)) {
                 poseStack.pushPose();
-                RenderHelper.setupRenderingAtController(1, poseStack);
+                RenderHelper.setupRenderingAtController(1, poseStack.last().pose());
                 Vec3 start = new Vec3(0.0D, 0.005D, 0.03D);
                 float max = 0.03F;
                 float r;
@@ -277,12 +268,12 @@ public class VRArmHelper {
                     r = 0.0F;
                 }
                 RenderSystem.setShader(GameRenderer::getPositionColorShader);
-                mc.getTextureManager().bindForSetup(new ResourceLocation("vivecraft:textures/white.png"));
-                RenderSystem.setShaderTexture(0, new ResourceLocation("vivecraft:textures/white.png"));
+                mc.getTextureManager().bindForSetup(ResourceLocation.parse("vivecraft:textures/white.png"));
+                RenderSystem.setShaderTexture(0, ResourceLocation.parse("vivecraft:textures/white.png"));
                 RenderHelper.renderFlatQuad(start.add(0.0D, 0.05001D, 0.0D), r, r, 0.0F, tpLimitedColor.getX(),
-                    tpLimitedColor.getY(), tpLimitedColor.getZ(), 128, poseStack);
+                    tpLimitedColor.getY(), tpLimitedColor.getZ(), 128, poseStack.last().pose());
                 RenderHelper.renderFlatQuad(start.add(0.0D, 0.05D, 0.0D), max, max, 0.0F, tpLimitedColor.getX(),
-                    tpLimitedColor.getY(), tpLimitedColor.getZ(), 50, poseStack);
+                    tpLimitedColor.getY(), tpLimitedColor.getZ(), 50, poseStack.last().pose());
                 poseStack.popPose();
             }
 
@@ -290,7 +281,7 @@ public class VRArmHelper {
                 RenderSystem.enableDepthTest();
 
                 if (dataHolder.teleportTracker.vrMovementStyle.arcAiming) {
-                    renderTeleportArc(poseStack);
+                    renderTeleportArc(poseStack.last().pose());
                 }
             }
 
@@ -299,12 +290,10 @@ public class VRArmHelper {
 //			if (Config.isShaders()) {
 //				Shaders.useProgram(program);
 //			}
-
-            poseStack.popPose();
         }
     }
 
-    public static void renderTeleportArc(PoseStack poseStack) {
+    public static void renderTeleportArc(Matrix4f matrix) {
         if (dataHolder.teleportTracker.vrMovementStyle.showBeam
             && dataHolder.teleportTracker.isAiming()
             && dataHolder.teleportTracker.movementTeleportArcSteps > 1) {
@@ -314,11 +303,10 @@ public class VRArmHelper {
             RenderSystem.setShader(GameRenderer::getPositionColorShader);
 
             // to make shaders work
-            mc.getTextureManager().bindForSetup(new ResourceLocation("vivecraft:textures/white.png"));
-            RenderSystem.setShaderTexture(0, new ResourceLocation("vivecraft:textures/white.png"));
+            mc.getTextureManager().bindForSetup(ResourceLocation.parse("vivecraft:textures/white.png"));
+            RenderSystem.setShaderTexture(0, ResourceLocation.parse("vivecraft:textures/white.png"));
 
-            Tesselator tesselator = Tesselator.getInstance();
-            tesselator.getBuilder().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_NORMAL);
+            BufferBuilder bufferBuilder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_NORMAL);
 
             double VOffset = dataHolder.teleportTracker.lastTeleportArcDisplayOffset;
             Vec3 dest = dataHolder.teleportTracker.getDestination();
@@ -365,10 +353,10 @@ public class VRArmHelper {
                 Vec3 end = dataHolder.teleportTracker.getInterpolatedArcPosition((float) progress)
                     .subtract(cameraPosition);
                 float shift = (float) progress * 2.0F;
-                RenderHelper.renderBox(tesselator, start, end, -segmentHalfWidth, segmentHalfWidth, (-1.0F + shift) * segmentHalfWidth, (1.0F + shift) * segmentHalfWidth, color, alpha, poseStack);
+                RenderHelper.renderBox(bufferBuilder, start, end, -segmentHalfWidth, segmentHalfWidth, (-1.0F + shift) * segmentHalfWidth, (1.0F + shift) * segmentHalfWidth, color, alpha, matrix);
             }
 
-            tesselator.end();
+            BufferUploader.drawWithShader(bufferBuilder.buildOrThrow());
 
             // hit indicator
             if (validLocation && dataHolder.teleportTracker.movementTeleportProgress >= 1.0D) {
@@ -382,17 +370,17 @@ public class VRArmHelper {
                 y += offset;
 
                 RenderHelper.renderFlatQuad(vec34.add(x, y, z), 0.6F, 0.6F, 0.0F, (int) (color.getX() * 1.03D),
-                    (int) (color.getY() * 1.03D), (int) (color.getZ() * 1.03D), 64, poseStack);
+                    (int) (color.getY() * 1.03D), (int) (color.getZ() * 1.03D), 64, matrix);
 
                 y += offset;
 
                 RenderHelper.renderFlatQuad(vec34.add(x, y, z), 0.4F, 0.4F, 0.0F, (int) (color.getX() * 1.04D),
-                    (int) (color.getY() * 1.04D), (int) (color.getZ() * 1.04D), 64, poseStack);
+                    (int) (color.getY() * 1.04D), (int) (color.getZ() * 1.04D), 64, matrix);
 
                 y += offset;
 
                 RenderHelper.renderFlatQuad(vec34.add(x, y, z), 0.2F, 0.2F, 0.0F, (int) (color.getX() * 1.05D),
-                    (int) (color.getY() * 1.05D), (int) (color.getZ() * 1.05D), 64, poseStack);
+                    (int) (color.getY() * 1.05D), (int) (color.getZ() * 1.05D), 64, matrix);
                 RenderSystem.enableCull();
             }
 
