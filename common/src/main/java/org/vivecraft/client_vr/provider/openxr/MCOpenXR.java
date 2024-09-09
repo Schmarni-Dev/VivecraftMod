@@ -6,6 +6,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import org.apache.commons.lang3.tuple.Pair;
+import org.joml.Math;
 import org.joml.Vector2f;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.*;
@@ -13,6 +14,7 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL21;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
+import org.lwjgl.openvr.VRActiveActionSet;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.Platform;
@@ -64,7 +66,7 @@ public class MCOpenXR extends MCVR {
     public int height;
     // TODO either move to MCVR, Or make special for OpenXR holding the instance
     // itself.
-    private final Map<VRInputActionSet, Long> actionSetHandles = new EnumMap<>(VRInputActionSet.class);
+    private final Map<VRInputActionSet, Long> actionSetHandles = new HashMap<>();
     // TODO Move to MCVR
     private XrActiveActionSet.Buffer activeActionSetsBuffer;
     private boolean isActive;
@@ -618,7 +620,8 @@ public class MCOpenXR extends MCVR {
         arraylist.add(VRInputActionSet.GLOBAL);
 
         // we are always modded
-        arraylist.add(VRInputActionSet.MOD);
+        // arraylist.add(VRInputActionSet.MOD);
+        arraylist.addAll(VRInputActionSet.modded_sets);
 
         arraylist.add(VRInputActionSet.MIXED_REALITY);
         arraylist.add(VRInputActionSet.TECHNICAL);
@@ -730,12 +733,14 @@ public class MCOpenXR extends MCVR {
 
     @Override
     public Vector2f getPlayAreaSize() {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            XrExtent2Df vec = XrExtent2Df.calloc(stack);
-            int error = XR10.xrGetReferenceSpaceBoundsRect(session, XR10.XR_REFERENCE_SPACE_TYPE_STAGE, vec);
-            logError(error, "xrGetReferenceSpaceBoundsRect", "");
-            return new Vector2f(vec.width(), vec.height());
-        }
+        // try (MemoryStack stack = MemoryStack.stackPush()) {
+        // XrExtent2Df vec = XrExtent2Df.calloc(stack);
+        // int error = XR10.xrGetReferenceSpaceBoundsRect(session,
+        // XR10.XR_REFERENCE_SPACE_TYPE_STAGE, vec);
+        // logError(error, "xrGetReferenceSpaceBoundsRect", "");
+        // return new Vector2f(vec.width(), vec.height());
+        // }
+        return new Vector2f(0f, 0f);
     }
 
     @Override
@@ -791,7 +796,7 @@ public class MCOpenXR extends MCVR {
 
             // get needed extensions
             boolean missingOpenGL = true;
-            PointerBuffer extensions = stack.callocPointer(3);
+            PointerBuffer extensions = stack.callocPointer(5);
             while (properties.hasRemaining()) {
                 XrExtensionProperties prop = properties.get();
                 String extensionName = prop.extensionNameString();
@@ -808,6 +813,16 @@ public class MCOpenXR extends MCVR {
                         HTCViveCosmosControllerInteraction.XR_HTC_VIVE_COSMOS_CONTROLLER_INTERACTION_EXTENSION_NAME)) {
                     extensions.put(memAddress(stackUTF8(
                             HTCViveCosmosControllerInteraction.XR_HTC_VIVE_COSMOS_CONTROLLER_INTERACTION_EXTENSION_NAME)));
+                }
+                if (extensionName.equals(
+                        EXTDpadBinding.XR_EXT_DPAD_BINDING_EXTENSION_NAME)) {
+                    extensions.put(memAddress(stackUTF8(
+                            EXTDpadBinding.XR_EXT_DPAD_BINDING_EXTENSION_NAME)));
+                }
+                if (extensionName.equals(
+                        KHRBindingModification.XR_KHR_BINDING_MODIFICATION_EXTENSION_NAME)) {
+                    extensions.put(memAddress(stackUTF8(
+                            KHRBindingModification.XR_KHR_BINDING_MODIFICATION_EXTENSION_NAME)));
                 }
             }
 
@@ -1161,26 +1176,27 @@ public class MCOpenXR extends MCVR {
     public String getOriginName(long l) {
         return "";
         // try (MemoryStack stack = MemoryStack.stackPush()) {
-        //     XrInputSourceLocalizedNameGetInfo info = XrInputSourceLocalizedNameGetInfo.calloc(stack);
-        //     info.type(XR10.XR_TYPE_INPUT_SOURCE_LOCALIZED_NAME_GET_INFO);
-        //     info.next(0);
-        //     info.sourcePath(l);
-        //     info.whichComponents(XR10.XR_INPUT_SOURCE_LOCALIZED_NAME_COMPONENT_BIT);
+        // XrInputSourceLocalizedNameGetInfo info =
+        // XrInputSourceLocalizedNameGetInfo.calloc(stack);
+        // info.type(XR10.XR_TYPE_INPUT_SOURCE_LOCALIZED_NAME_GET_INFO);
+        // info.next(0);
+        // info.sourcePath(l);
+        // info.whichComponents(XR10.XR_INPUT_SOURCE_LOCALIZED_NAME_COMPONENT_BIT);
         //
-        //     IntBuffer buf = stack.callocInt(1);
-        //     int error = XR10.xrGetInputSourceLocalizedName(session, info, buf, null);
-        //     logError(error, "xrGetInputSourceLocalizedName", "get length");
+        // IntBuffer buf = stack.callocInt(1);
+        // int error = XR10.xrGetInputSourceLocalizedName(session, info, buf, null);
+        // logError(error, "xrGetInputSourceLocalizedName", "get length");
         //
-        //     int size = buf.get();
-        //     if (size <= 0) {
-        //         return "";
-        //     }
+        // int size = buf.get();
+        // if (size <= 0) {
+        // return "";
+        // }
         //
-        //     buf = stack.callocInt(size);
-        //     ByteBuffer byteBuffer = stack.calloc(size);
-        //     error = XR10.xrGetInputSourceLocalizedName(session, info, buf, byteBuffer);
-        //     logError(error, "xrGetInputSourceLocalizedName", "get String");
-        //     return new String(byteBuffer.array());
+        // buf = stack.callocInt(size);
+        // ByteBuffer byteBuffer = stack.calloc(size);
+        // error = XR10.xrGetInputSourceLocalizedName(session, info, buf, byteBuffer);
+        // logError(error, "xrGetInputSourceLocalizedName", "get String");
+        // return new String(byteBuffer.array());
         // }
     }
 
@@ -1294,7 +1310,31 @@ public class MCOpenXR extends MCVR {
                 XrInteractionProfileSuggestedBinding suggested_binds = XrInteractionProfileSuggestedBinding
                         .calloc(stack);
                 suggested_binds.type(XR10.XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING);
-                suggested_binds.next(NULL);
+                if (session.getCapabilities().XR_KHR_binding_modification
+                        && session.getCapabilities().XR_EXT_dpad_binding) {
+                    XrActionSet actionSet_2 = new XrActionSet(actionSetHandles.get(VRInputActionSet.INGAME), instance);
+                    var w = XrInteractionProfileDpadBindingEXT.calloc(stack);
+                    w.forceThreshold(0.8f);
+                    w.forceThresholdReleased(0.4f);
+                    w.centerRegion(0.5f);
+                    w.wedgeAngle(2f);
+                    w.isSticky(false);
+                    w.binding(getPath("/user/hand/right/input/thumbstick"));
+                    w.type(1000078000);
+                    w.actionSet(actionSet_2);
+                    w.next(NULL);
+                    var modifications = XrBindingModificationsKHR.calloc(stack);
+                    var buf = PointerBuffer.allocateDirect(1);
+                    buf.put(w.address());
+                    modifications.next(NULL);
+                    modifications.bindingModificationCount(buf.limit());
+                    modifications.bindingModifications(buf);
+                    modifications.type(1000120000);
+                    suggested_binds.next(modifications);
+                } else {
+                    suggested_binds.next(NULL);
+                }
+
                 suggested_binds.interactionProfile(getPath(headset));
                 suggested_binds.suggestedBindings(bindings);
 
@@ -1359,6 +1399,13 @@ public class MCOpenXR extends MCVR {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             String s = name.split("/")[name.split("/").length - 1].toLowerCase();
             XrActionCreateInfo hands = XrActionCreateInfo.calloc(stack);
+            // Real limit is 64 bytes of Utf8
+            if (s.length() >= 48) {
+                s = s.substring((s.length() - 1) - 48, s.length());
+                // System.out.println("OVER 64!!");
+                // System.out.println(s);
+                // throw new RuntimeException(s);
+            }
             hands.type(XR10.XR_TYPE_ACTION_CREATE_INFO);
             hands.next(NULL);
             hands.actionName(memUTF8(s));

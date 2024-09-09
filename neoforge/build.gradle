@@ -40,9 +40,6 @@ dependencies {
     forgeRuntimeLibrary("org.lwjgl:lwjgl-openxr:3.3.3:natives-windows")
 
     // shadow the natives
-    bundle("org.lwjgl:lwjgl-openxr:3.3.1") { transitive = false }
-    bundle("org.lwjgl:lwjgl-openxr:3.3.1:natives-linux") { transitive = false }
-    bundle("org.lwjgl:lwjgl-openxr:3.3.1:natives-windows") { transitive = false }
     bundle("org.lwjgl:lwjgl-openvr:3.3.3") { transitive = false }
     bundle("org.lwjgl:lwjgl-openvr:3.3.3:natives-linux") { transitive = false }
     bundle("org.lwjgl:lwjgl-openvr:3.3.3:natives-macos") { transitive = false }
